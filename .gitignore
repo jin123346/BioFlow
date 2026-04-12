@@ -1,0 +1,54 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 가상환경
+venv/
+env/
+.venv/
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# 테스트/커버리지
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+
+# 빌드
+build/
+dist/
+*.egg-info/
+
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# 엑셀 파일 (절대 커밋 금지)
+*.xlsx
+*.xls
+*.xlsm
+
+# 임시 데이터
+data/
+output/
+temp/
+
+# 로그
+*.log
