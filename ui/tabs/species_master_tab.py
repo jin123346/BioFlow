@@ -14,9 +14,14 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QTableWidget,
     QTableWidgetItem,
-    QListWidget
+    QListWidget,
+    QApplication,
+    QMessageBox
 )
-from config.paths import MASTER_FILE_PATH, LOCAL_VERSION_FILE_PATH, MASTER_DIR, META_DIR ,HISTORY_DIR,LOCAL_VERSION_HISTORY_FILE_PATH
+from PySide6.QtCore import QSettings,QTimer
+from config.paths import MASTER_FILE_PATH, LOCAL_VERSION_FILE_PATH, MASTER_DIR, META_DIR ,HISTORY_DIR,LOCAL_VERSION_HISTORY_FILE_PATH,CACHE_DIR,MASTER_CACHE_FILE
+import os
+
 
 def normalize_sheet_name(name: str) -> str:
     if name is None:
@@ -27,6 +32,7 @@ def normalize_sheet_name(name: str) -> str:
     text = text.replace("\xa0", " ")   # 특수 공백 제거
     text = " ".join(text.split())      # 연속 공백 정리 + 앞뒤 공백 제거
     return text.strip()
+
 
 TARGET_SHEET_NAME = "국명이없거나 학명정보가잘못된것 기재 "
 TARGET_SHEET_NAME_NORMALIZED = normalize_sheet_name(TARGET_SHEET_NAME)
@@ -39,9 +45,13 @@ class SpeciesMasterTab(QWidget):
         self.update_files = [] # 업데이트용 엑셀 파일 경로 목록
         self.df_candidates= None #업데이트 시트 통합 결과
         self.df_compare_result=None #비교 결과 데이터프레임
-        
+        self.status_label= None
+        self.settings = QSettings("Bioflow", "BioflowApp")
 
         self.init_ui()
+        QTimer.singleShot(100, self.load_last_species_master)
+        
+        #self.load_last_species_master()
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -60,12 +70,18 @@ class SpeciesMasterTab(QWidget):
 
         self.select_file_button = QPushButton("파일선택")
         self.select_file_button.clicked.connect(self.select_master_file)
+        
 
         file_layout.addWidget(QLabel("종정보 마스터"))
         file_layout.addWidget(self.master_file_path)
         file_layout.addWidget(self.select_file_button)
 
         main_layout.addLayout(file_layout)
+
+        self.status_label =QLabel("대기 중")
+        self.status_label.setStyleSheet("color: blue;")
+        main_layout.addWidget(self.status_label)
+        self.setLayout(main_layout)
 
         self.load_button = QPushButton("엑셀 로드")
         self.load_button.clicked.connect(self.load_excel)
@@ -90,11 +106,15 @@ class SpeciesMasterTab(QWidget):
         self.compare_button= QPushButton("신규/업로드 분류")
         self.compare_button.clicked.connect(self.compare_with_master)
 
+        self.save_compare_result_button = QPushButton("업데이트 엑셀 저장")
+        self.save_compare_result_button.clicked.connect(self.save_compare_result_to_excel)
+        
 
-        update_file_layout.addWidget(self.select_update_files_button)        
+
+        update_file_layout.addWidget(self.select_update_files_button)
         update_file_layout.addWidget(self.extract_candidates_button)
         update_file_layout.addWidget(self.compare_button)
-
+        update_file_layout.addWidget(self.save_compare_result_button)
         main_layout.addLayout(update_file_layout)
         
         self.update_files_list = QListWidget()
@@ -199,6 +219,7 @@ class SpeciesMasterTab(QWidget):
             MASTER_DIR.mkdir(parents=True, exist_ok=True)
             META_DIR.mkdir(parents=True, exist_ok=True)
             HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
             
             #1.원본파일 복사 저장
             shutil.copy2(source_file_path, MASTER_FILE_PATH)
@@ -208,6 +229,8 @@ class SpeciesMasterTab(QWidget):
             backup_file_path = HISTORY_DIR/f"species_master_backup_{timestamp}.xlsx"
             shutil.copy2(source_file_path, backup_file_path)
             
+
+            self.df.to_pickle(MASTER_CACHE_FILE)
             
             
             #2.버전 정보 저장
@@ -240,7 +263,7 @@ class SpeciesMasterTab(QWidget):
 
             with open(LOCAL_VERSION_HISTORY_FILE_PATH, "w", encoding="utf-8") as f:
                 json.dump(history_data, f, ensure_ascii=False, indent=4)
-                 
+
             self.append_log(f"로컬 저장 성공 : {MASTER_FILE_PATH}")
             self.append_log(f"백업 저장 성공 : {backup_file_path}")    
             self.append_log(f"버전 정보 저장 성공 : {LOCAL_VERSION_FILE_PATH}")     
@@ -306,7 +329,7 @@ class SpeciesMasterTab(QWidget):
         self.result_table.clear()
         self.result_table.setRowCount(len(df))
         self.result_table.setColumnCount(len(df.columns))
-        self.reuslt_table.setHorizontalHeaderLabels([str(col) for col in df.columns])   
+        self.result_table.setHorizontalHeaderLabels([str(col) for col in df.columns])
         
         for row_idx in range(len(df)):
             for col_idx in range(len(df.columns)):
@@ -319,7 +342,47 @@ class SpeciesMasterTab(QWidget):
         self.result_table.resizeColumnsToContents()
         self.append_log("비교 결과 테이블 표시 완료")
         
-    
+    #업데이트 데이터 엑셀파일 저장로직
+    def save_compare_result_to_excel(self):
+        if self.df_compare_result is None or self.df_compare_result.empty:
+            self.append_log("저장할 비교 결과가 없습니다. 먼저 신규/업데이트 분류를 실행해 주세요.")
+            return
+
+        default_name = f"species_compare_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "비교 결과 저장",
+            default_name,
+            "Excel Files (*.xlsx)"
+        )
+
+        if not file_path:
+            self.append_log("비교 결과 저장이 취소되었습니다.")
+            return
+
+        try:
+            save_df = self.df_compare_result.copy()
+
+            # 원하면 상태별 정렬
+            if "status" in save_df.columns:
+                status_order = {
+                    "신규": 0,
+                    "업데이트": 1,
+                    "업데이트(중복)": 2,
+                    "검토필요": 3,
+                    "식별정보부족": 4,
+                }
+                save_df["_status_order"] = save_df["status"].map(status_order).fillna(99)
+                save_df = save_df.sort_values(by=["_status_order"]).drop(columns=["_status_order"])
+
+            save_df.to_excel(file_path, index=False)
+
+            self.append_log(f"비교 결과 저장 완료: {file_path}")
+
+        except Exception as e:
+            self.append_log(f"비교 결과 저장 실패: {str(e)}")
+
         
     def compare_with_master(self):
         if self.df is None:
@@ -364,48 +427,94 @@ class SpeciesMasterTab(QWidget):
 
             
             if not cand_cnnm and not cand_scnm:
-                status = " 식별정보부족"
-                match_basis = "학명/국명 모두 없음" 
+                status = "식별정보부족"
+                match_basis = "학명/국명 모두 없음"
+
             elif cand_scnm and cand_cnnm:
-                exact_match= master_df[(master_df["학명"] == cand_scnm) & (master_df["국명"] == cand_cnnm)]
+                exact_match = master_df[
+                    (master_df["학명"] == cand_scnm) &
+                    (master_df["국명"] == cand_cnnm)
+                ]
+
                 if len(exact_match) == 1:
                     matched_row = exact_match.iloc[0]
-                    status="업데이트"
-                    match_basis="학명+국명 일치"
+                    status = "업데이트"
+                    match_basis = "학명+국명 일치"
+
                 elif len(exact_match) > 1:
                     matched_row = exact_match.iloc[0]
-                    status="업데이트(중복)"
-                    match_basis="학명+국명 일치(마스터 내 중복)"
-                elif len(matched_by_scnm)==0 and len(matched_by_cnnm)==0:
-                    status="신규"
-                    match_basis="미매칭"
+                    status = "업데이트(중복)"
+                    match_basis = "학명+국명 일치(마스터 내 중복)"
+
                 else:
-                    status="검토필요"
-                    match_basis="학명 또는 국명 일부 일치"
-            elif cand_scnm and not cand_cnnm:   #학명만 있는경우
+                    scnm_cnt = len(matched_by_scnm)
+                    cnnm_cnt = len(matched_by_cnnm)
+
+                    if scnm_cnt == 0 and cnnm_cnt == 0:
+                        status = "신규"
+                        match_basis = "학명/국명 모두 미매칭"
+
+                    elif scnm_cnt == 1 and cnnm_cnt == 0:
+                        matched_row = matched_by_scnm.iloc[0]
+                        status = "검토필요"
+                        match_basis = "학명만 일치"
+
+                    elif scnm_cnt == 0 and cnnm_cnt == 1:
+                        matched_row = matched_by_cnnm.iloc[0]
+                        status = "검토필요"
+                        match_basis = "국명만 일치"
+
+                    elif scnm_cnt == 1 and cnnm_cnt == 1:
+                        scnm_row = matched_by_scnm.iloc[0]
+                        cnnm_row = matched_by_cnnm.iloc[0]
+
+                        if scnm_row["species_essnt_info_id"] == cnnm_row["species_essnt_info_id"]:
+                            matched_row = scnm_row
+                            status = "업데이트"
+                            match_basis = "학명/국명 동일 개체 매칭"
+                        else:
+                            status = "검토필요"
+                            match_basis = "학명 일치 종과 국명 일치 종이 서로 다름"
+
+                    elif scnm_cnt > 1 and cnnm_cnt == 0:
+                        matched_row = matched_by_scnm.iloc[0]
+                        status = "업데이트(중복)"
+                        match_basis = "학명 일치(마스터 내 중복)"
+
+                    elif scnm_cnt == 0 and cnnm_cnt > 1:
+                        matched_row = matched_by_cnnm.iloc[0]
+                        status = "업데이트(중복)"
+                        match_basis = "국명 일치(마스터 내 중복)"
+
+                    else:
+                        status = "검토필요"
+                        match_basis = "학명/국명 부분 일치 또는 중복 혼재"
+
+            elif cand_scnm and not cand_cnnm:
                 if len(matched_by_scnm) == 1:
                     matched_row = matched_by_scnm.iloc[0]
-                    status="업데이트"
-                    match_basis="학명 일치"
+                    status = "업데이트"
+                    match_basis = "학명 일치"
                 elif len(matched_by_scnm) > 1:
                     matched_row = matched_by_scnm.iloc[0]
-                    status="업데이트(중복)"
-                    match_basis="학명 일치(마스터 내 중복)"
+                    status = "업데이트(중복)"
+                    match_basis = "학명 일치(마스터 내 중복)"
                 else:
-                    status="신규"
-                    match_basis="학명 미매칭"
-            elif cand_cnnm and not cand_scnm:   #국명만 있는 경우
+                    status = "신규"
+                    match_basis = "학명 미매칭"
+
+            elif cand_cnnm and not cand_scnm:
                 if len(matched_by_cnnm) == 1:
                     matched_row = matched_by_cnnm.iloc[0]
-                    status="업데이트"
-                    match_basis="국명 일치"
+                    status = "업데이트"
+                    match_basis = "국명 일치"
                 elif len(matched_by_cnnm) > 1:
                     matched_row = matched_by_cnnm.iloc[0]
-                    status="업데이트(중복)"
-                    match_basis="국명 일치(마스터 내 중복)"
+                    status = "업데이트(중복)"
+                    match_basis = "국명 일치(마스터 내 중복)"
                 else:
-                    status="신규"
-                    match_basis="국명 미매칭"
+                    status = "신규"
+                    match_basis = "국명 미매칭"
             
             result_row = row.to_dict()
             result_row["status"] = status
@@ -427,7 +536,7 @@ class SpeciesMasterTab(QWidget):
                 result_row["matched_cnnm"] = ""
             
             result_rows.append(result_row)
-           
+
         self.df_compare_result = pd.DataFrame(result_rows)
         self.append_log(
             f"비교 완료 - 신규: {(self.df_compare_result['status'] == '신규').sum()}건, "
@@ -437,6 +546,72 @@ class SpeciesMasterTab(QWidget):
         )
 
         self.show_result_preview(self.df_compare_result.head(50))
+        reply = QMessageBox.question(
+            self,
+            "비교 결과 저장",
+            "비교가 완료되었습니다. 결과를 엑셀로 저장하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.Yes:
+            self.save_compare_result_to_excel()
+
+    #기존 종정보 업로드 파일 로드
+    def _load_master_from_excel(self):
+        self.append_log("원본 엑셀 로딩 중...")
+        self.df = pd.read_excel(MASTER_FILE_PATH, header=1)
+
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self.df.to_pickle(MASTER_CACHE_FILE)
+
+        self.master_file_path.setText(str(MASTER_FILE_PATH))
+        self.append_log("원본 엑셀 로드 및 캐시 갱신 완료")
+        self.show_dataframe_preview(self.df)
+        self.status_label.setText("로드 완료")
+
+    #앱 시작시 자동로드
+    def load_last_species_master(self):
+        self.append_log("종정보 마스터 확인 중...")
+        self.status_label.setText("종정보 마스터 로딩 중...")
+        self.status_label.setStyleSheet("color: green;")
+        QApplication.processEvents()
+
+        try:
+            if MASTER_CACHE_FILE.exists():
+                self.append_log("캐시 로딩 중...")
+                self.df = pd.read_pickle(MASTER_CACHE_FILE)
+                self.master_file_path.setText(str(MASTER_FILE_PATH))
+                self.append_log(f"캐시 로드 성공: {MASTER_CACHE_FILE}")
+                self.show_dataframe_preview(self.df)
+                self.status_label.setText("로드 완료")
+                self.status_label.setStyleSheet("color: red;")
+                return
+
+            if MASTER_FILE_PATH.exists():
+                self._load_master_from_excel()
+                self.status_label.setText("로드 완료")
+                self.status_label.setStyleSheet("color: red;")
+                return
+
+            self.append_log("저장된 종정보 파일 없음")
+
+        except Exception as e:
+            self.status_label.setText("로드 실패")
+            self.append_log(f"자동 로드 실패: {str(e)}")
+
+    #다시 불러오기
+    def reload_master(self):
+        try:
+            if not MASTER_FILE_PATH.exists():
+                self.append_log("재로딩할 원본 파일이 없습니다.")
+                return
+
+            self._load_master_from_excel()
+            self.append_log("재로딩 완료")
+
+        except Exception as e:
+            self.append_log(f"재로딩 실패: {str(e)}")
             
 
 def normalize_text(value):
@@ -452,5 +627,6 @@ def find_target_sheet_name(file_path: str, target_sheet_name: str) -> str | None
     for sheet_name in excel_file.sheet_names:
         if normalize_sheet_name(sheet_name) == normalized_target:
             return sheet_name
-
     return None
+
+
