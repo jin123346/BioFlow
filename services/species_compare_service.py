@@ -2,6 +2,9 @@
 
 import pandas as pd
 from utils.text_utils import normalize_text
+from config.constants import TARGET_SHEET_NAME
+from PySide6.QtWidgets import QFileDialog
+
 
 
 class SpeciesCompareService:
@@ -63,3 +66,43 @@ class SpeciesCompareService:
             result_rows.append(result_row)
 
         return pd.DataFrame(result_rows)
+    
+    def extract_update_candidates(self):
+        if not self.update_files:
+            self.append_log("업데이트할 파일을 먼저 선택해 주세요.")
+            return
+        try:
+            df = self.candidate_service.extract_candidates(self.update_files, TARGET_SHEET_NAME)
+            self.df_candidates = df
+            self.append_log(f"업데이트 후보 통합 완료 : 총 {len(df)} 행")
+            self.show_dataframe_preview(df)
+        except Exception as e:
+            self.append_log(f"업데이트 후보 추출 실패: {str(e)}")         
+    
+    def save_compare_result_to_excel(self):
+        if self.df_compare_result is None or self.df_compare_result.empty:
+            self.append_log("저장할 비교 결과가 없습니다.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(...)
+        if not file_path:
+            self.append_log("비교 결과 저장이 취소되었습니다.")
+            return
+
+        try:
+            self.export_service.save_compare_result(self.df_compare_result, file_path)
+            self.append_log(f"비교 결과 저장 완료: {file_path}")
+        except Exception as e:
+            self.append_log(f"비교 결과 저장 실패: {str(e)}")
+            
+    def build_summary_log(self, result_df: pd.DataFrame) -> str:
+        if result_df is None or result_df.empty:
+            return "비교 결과가 없습니다."
+
+        return (
+            f"비교 완료 - 신규: {(result_df['status'] == '신규').sum()}건, "
+            f"업데이트: {(result_df['status'] == '업데이트').sum()}건, "
+            f"업데이트(중복): {(result_df['status'] == '업데이트(중복)').sum()}건, "
+            f"검토필요: {(result_df['status'] == '검토필요').sum()}건, "
+            f"식별정보부족: {(result_df['status'] == '식별정보부족').sum()}건"
+        )

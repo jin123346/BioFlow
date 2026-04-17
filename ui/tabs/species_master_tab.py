@@ -331,12 +331,13 @@ class SpeciesMasterTab(QWidget):
             self.append_log("후보 없음")
             return
 
-        result_df = self.compare_service.compare(self.df, self.df_candidates)
-
-        self.df_compare_result = result_df
-
-        self.append_log("비교 완료")
-        self.show_result_preview(result_df.head(50))
+        try:
+            result_df = self.compare_service.compare(self.df, self.df_candidates)
+            self.df_compare_result = result_df
+            self.append_log(self.compare_service.build_summary_log(result_df))
+            self.show_result_preview(result_df.head(50))
+        except Exception as e:
+            self.append_log(f"비교 실패: {str(e)}")
 
 
 

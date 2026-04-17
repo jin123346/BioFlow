@@ -1,3 +1,9 @@
+
+from utils.text_utils import normalize_text
+from config.constants import TAXON_CODE_RULES
+import pandas as pd
+
+
 def detect_taxon_code(row: pd.Series) -> str:
     for field in [
         "분류코드",

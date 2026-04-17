@@ -30,12 +30,17 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
+        print("A")
         self.master_tab = SpeciesMasterTab()
+        print("B")
         self.upload_tab = UploadTab()
+        print("C")
         self.validation_tab = ValidationTab()
+        print("D")
         self.sql_tab = SqlTab()
+        print("E")
         self.gbif_tab = GbifTab()
-        
+        print("F")
 
         self.tabs.addTab(self.master_tab, "종정보 마스터")
         self.tabs.addTab(self.upload_tab, "신규 데이터")
