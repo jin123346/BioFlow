@@ -52,6 +52,7 @@ class PandasTableModel(QAbstractTableModel):
 # from PySide6.QtCore import QAbstractTableModel, QModelIndex, QObject, Qt, Signal
 # import pandas as pd
 
+
 # class PandasTableModel(QAbstractTableModel):
 #     def __init__(self, df: pd.DataFrame | None = None):
 #         super().__init__()

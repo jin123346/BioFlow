@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from services.upload_input_service import UploadInputService
 from services.upload_to_excel import UploadToExcelService
 from models.pandas_table_model import PandasTableModel
+from utils.text_utils import normalize_text
 
 # =========================
 # 설정 / 상수
@@ -105,13 +106,13 @@ class UploadTab(QWidget):
         file_layout.addWidget(self.select_file_button)  
         layout.addLayout(file_layout)
         
-        print("ui 5")
+       
         sheet_layout = QHBoxLayout()
         self.sheet_combo = QComboBox()
-        print("ui 6")
+      
         self.sheet_combo.setPlaceholderText("시트 선택")
         
-        print("ui 7")
+        
         self.load_button = QPushButton("시트 로드")
         self.load_button.clicked.connect(self.load_selected_sheet)
         
@@ -121,18 +122,92 @@ class UploadTab(QWidget):
         
         layout.addLayout(sheet_layout)
         
-        print("ui 8-1")
+        self.match_button=QPushButton("종 고유ID 찾기")
+        self.match_button.clicked.connect(self.match_species_id)
+        layout.addWidget(self.match_button)
+        
+
 
         self.table_view = QTableView()
-        print("ui 8-2")
+   
 
         self.table_view.setModel(self.table_model)
-        print("ui 8-3")
+     
 
         layout.addWidget(self.table_view)
+
+
+    def match_species_id(self):
+        if self.input_df is None or self.input_df.empty:
+            QMessageBox.warning(self,"경고","먼저 시트를 로드해주세요")
+            return
         
-        print("ui 9")
+        main_window=self.window()
+        species_master_df = main_window.master_tab.df
         
+        if species_master_df is None or species_master_df.empty:
+            QMessageBox.warning(self,"경고","종정보 master가 로드되지 않았습니다.")
+            return 
+        
+        df = self.input_df.copy()
+        master  = species_master_df.copy()
+       
+        master["국명"] = master["국명"].apply(normalize_text)
+        master["국명"] = master["국명"].apply(normalize_text)
+        
+        df["국명"] = df["국명 (잘라내서 붙이기 안됨 복사해서 붙이기는 허용)"].apply(normalize_text)
+        df["학명"] = df["학명 (국명입력시 자동생성)"].apply(normalize_text)
+        df["matched_species_id"]=""
+        df["matched_by"]=""
+        df["matched_name"]=""
+        df["matched_sci_name"]=""
+        df["matched_status"]=""
+        for idx, row in df.iterrows():
+            existing_id = normalize_text(row.get("종고유ID",""))
+            kor_name = normalize_text(row.get("국명 (잘라내서 붙이기 안됨 복사해서 붙이기는 허용)",""))
+            sci_name= normalize_text(row.get("학명 (국며입력시 자동생성)",""))
+            
+            #1.id 검증
+            if existing_id:
+                matched = master[master["종학명정보ID"]==existing_id]
+                if not matched.empty:
+                    df.at[idx,"matched_species_id"]= matched.iloc[0].get("종학명정보ID", "")
+                    df.at[idx,"matched_by"]="기존Id"
+                    df.at[idx,"matched_name"]= matched.iloc[0].get("국명", "")
+                    df.at[idx,"matched_sci_name"]= matched.iloc[0].get("학명", "")
+                    df.at[idx,"matched_status"]="매칭 성공"
+                else:
+                    df.at[idx,"matched_status"]="매칭 실패 - ID 없음"
+            
+            #2. 국명 매칭
+            if  kor_name:
+                matched = master[master["국명"]==kor_name]
+                if not matched.empty:
+                    df.at[idx,"matched_species_id"]= matched.iloc[0].get("종학명정보ID", "")
+                    df.at[idx,"matched_by"]="국명"
+                    df.at[idx,"matched_name"]= matched.iloc[0].get("국명", "")
+                    df.at[idx,"matched_sci_name"]= matched.iloc[0].get("학명", "")
+                    df.at[idx,"matched_status"]="매칭 성공"
+                    continue
+            #3. 학명 매칭
+            if sci_name:
+                matched = master[master["학명"]==sci_name]
+                if not matched.empty:
+                    df.at[idx,"matched_species_id"]= matched.iloc[0].get("종학명정보ID", "")
+                    df.at[idx,"matched_by"]="학명"
+                    df.at[idx,"matched_name"]= matched.iloc[0].get("국명", "")
+                    df.at[idx,"matched_sci_name"]= matched.iloc[0].get("학명", "")
+                    df.at[idx,"matched_status"]="매칭 성공"
+                    continue
+                
+            # 4. 실패
+            df.at[idx, "match_status"] = "미매칭"
+        
+        self.input_df = df
+        self.table_model.set_dataframe(df)
+        self.table_view.resizeColumnsToContents()
+        
+        QMessageBox.information(self,"매칭 완료","종 고유ID 매칭이 완료되었습니다. 매칭 결과를 확인해주세요.")
         
     def select_input_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "업로드할 엑셀 파일 선택", "", "Excel Files (*.xlsx *.xls);;All Files (*)")
