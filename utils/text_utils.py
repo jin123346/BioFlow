@@ -41,6 +41,13 @@ def normalize_scientific_name(value: object) -> str:
             return " ".join(keep).lower()
     return text.lower()
 
+def clean_master_value(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
 def build_db_no(inst_code: str, media_code: str, taxon_code: str, year: object, seq: object, no_value: object) -> str:
     inst_code = normalize_text(inst_code)
     taxon_code = normalize_text(taxon_code)

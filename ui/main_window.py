@@ -3,8 +3,9 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
-from PySide6.QtWidgets import ( QMainWindow, QTableWidget, QTableWidgetItem,QTabWidget)
+from PySide6.QtWidgets import ( QMainWindow, QTableWidget, QTableWidgetItem,QTabWidget, QMessageBox)
 from ui.tabs.species_master_tab import SpeciesMasterTab
+from ui.tabs.species_review_tab import SpeciesReviewTab
 from ui.tabs.upload_tab import UploadTab
 from ui.tabs.validataion_tab import ValidationTab
 from ui.tabs.sql_tab import SqlTab
@@ -32,16 +33,36 @@ class MainWindow(QMainWindow):
 
         self.master_tab = SpeciesMasterTab()
         self.upload_tab = UploadTab()
+        self.species_review_tab = SpeciesReviewTab(self.upload_tab)
         self.validation_tab = ValidationTab()
         self.sql_tab = SqlTab()
         self.gbif_tab = GbifTab()
-        
+
 
         self.tabs.addTab(self.master_tab, "종정보 마스터")
         self.tabs.addTab(self.upload_tab, "신규 데이터")
+        self.tabs.addTab(self.species_review_tab, "신규/업데이트 종 정리")
         self.tabs.addTab(self.validation_tab, "비교 결과")
         self.tabs.addTab(self.sql_tab, "SQL 생성")
         self.tabs.addTab(self.gbif_tab, "GBIF 데이터")
 
-             
-            
+    def closeEvent(self, event):
+        has_rows = self.upload_tab.data_table.rowCount() > 0
+        has_form_content = self.upload_tab.has_form_content(self.upload_tab.collect_form_values())
+        if not has_rows and not has_form_content:
+            event.accept()
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "종료 확인",
+            "작성 중인 신규 데이터가 있습니다. 임시저장할까요?",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Cancel:
+            event.ignore()
+            return
+        if reply == QMessageBox.Yes:
+            self.upload_tab.autosave_draft()
+        event.accept()

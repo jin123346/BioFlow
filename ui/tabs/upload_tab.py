@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
+import time
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
+
+logger = logging.getLogger("bioflow.upload_tab")
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
+    QCompleter,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -31,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from config.paths import DATA_DIR
+from services.address_master_service import AddressMasterService
 from services.species_master_service import SpeciesMasterService
 from utils.text_utils import normalize_text
 
@@ -52,6 +61,14 @@ ROW_COLUMNS = [
     "미디어타입",
     "미디어코드",
     "미디어파일",
+    "동영상 제목",
+    "동영상 상세설명",
+    "동영상 재생시간",
+    "동영상 파일명",
+    "사운드 제목",
+    "사운드 상세설명",
+    "사운드 재생시간",
+    "사운드 파일명",
     "분류코드",
     "사업명",
     "사업년도",
@@ -97,6 +114,56 @@ ROW_COLUMNS = [
 PROJECT_COLUMNS = ["사업년도", "순번", "사업명"]
 ORGANIZATION_COLUMNS = ["기관명", "기관코드"]
 
+# 완성본(재구성) 엑셀 컬럼 순서: (완성본 컬럼명, 작성 폼의 원본 컬럼명 또는 None=항상 빈칸)
+FINAL_EXPORT_COLUMNS: list[tuple[str, str | None]] = [
+    ("관찰정보순번", None),
+    ("종고유ID", "종고유ID"),
+    ("학명", "학명"),
+    ("기관코드", "기관코드"),
+    ("기관명", "기관명"),
+    ("동정자 국문", "동정자 국문"),
+    ("동정자 영문", "동정자 영문"),
+    ("동정년월일", "동정년월일"),
+    ("대륙해양국문명", "대륙/해양 국문"),
+    ("대륙해양영문명", "대륙/해양 영문"),
+    ("국가 국문명", "국가국문명"),
+    ("국가 영문명", "국가영문명"),
+    ("경도", "경도"),
+    ("위도", "위도"),
+    ("성별", "성별"),
+    ("연령", "연령"),
+    ("이전목록번호국문명", "이전목록번호 국문명"),
+    ("이전목록번호영문명", "이전목록번호 영문명"),
+    ("데이터베이스번호", "데이터베이스번호"),
+    ("원본여부", "원본여부"),
+    ("관찰정보 공개여부", "관찰 공개여부"),
+    ("관찰위치 시도 국문", "관찰위치 시도 국문"),
+    ("관찰위치 시도 영문", "관찰위치 시도 영문"),
+    ("관찰위치 시군구 국문", "관찰위치 시군구 국문"),
+    ("관찰위치 시군구 영문", "관찰위치 시군구 영문"),
+    ("관찰위치읍면동국문명", "관찰위치 읍면동 국문"),
+    ("관찰위치읍면동영문명", "관찰위치 읍면동 영문"),
+    ("관찰위치 상세 국문", "관찰위치 상세 국문"),
+    ("관찰위치 상세 영문", "관찰위치 상세 영문"),
+    ("관찰자 국문", "관찰자 국문"),
+    ("관찰자 영문", "관찰자 영문"),
+    ("관찰년월일", "관찰일"),
+    ("사업년도", "사업년도"),
+    ("순번", "순번"),
+    ("사업명", "사업명"),
+    ("원산지", "원산지"),
+    ("원산지 공개여부", "원산지 공개여부"),
+    ("자원공개여부", "자원공개여부"),
+    ("국외반출여부", "국외반출여부"),
+    ("분양가능여부", "분양가능여부"),
+    ("관리번호", None),
+    ("개체수", "관찰개체수"),
+    ("최소고도", None),
+    ("최대고도", None),
+    ("최소수심", None),
+    ("최대수심", None),
+]
+
 DROPDOWN_OPTIONS = {
     "미디어타입": ["정보", "이미지", "동영상", "사운드"],
     "분류코드": ["IN", "PL", "BI", "PI", "MM"],
@@ -112,11 +179,40 @@ DROPDOWN_OPTIONS = {
     "분양가능여부": ["가능", "불가능"],
 }
 
+DROPDOWN_DEFAULTS = {
+    "성별": "확인불가",
+    "연령": "확인불가",
+    "원본여부": "원본",
+    "관찰 공개여부": "공개",
+    "원산지 공개여부": "공개",
+    "자원공개여부": "공개",
+    "국외반출여부": "미반출",
+}
+
+# 사업/기관/미디어타입/분류코드는 여러 행을 연달아 입력할 때 세션 내내 유지되는 값
+STICKY_FIELDS = {"사업명", "사업년도", "순번", "기관명", "기관코드", "미디어타입", "분류코드"}
+
+VIDEO_FIELDS = ["동영상 제목", "동영상 상세설명", "동영상 재생시간", "동영상 파일명"]
+SOUND_FIELDS = ["사운드 제목", "사운드 상세설명", "사운드 재생시간", "사운드 파일명"]
+
+ADDRESS_FIELDS = {
+    "관찰위치 시도 국문": ("관찰위치 시도 영문", "sido"),
+    "관찰위치 시군구 국문": ("관찰위치 시군구 영문", "sigungu"),
+    "관찰위치 읍면동 국문": ("관찰위치 읍면동 영문", "eupmyeondong"),
+    "관찰위치 상세 국문": ("관찰위치 상세 영문", "detail"),
+}
+
 MEDIA_TYPE_CODES = {
     "정보": "OB",
     "이미지": "OI",
     "동영상": "OM",
     "사운드": "OS",
+}
+
+MEDIA_EXTENSION_TYPES = {
+    ".jpg": "이미지", ".jpeg": "이미지", ".tif": "이미지", ".tiff": "이미지", ".heic": "이미지", ".png": "이미지",
+    ".mp4": "동영상", ".mov": "동영상", ".m4v": "동영상", ".avi": "동영상", ".mts": "동영상", ".3gp": "동영상",
+    ".wav": "사운드", ".mp3": "사운드", ".m4a": "사운드", ".aac": "사운드", ".flac": "사운드",
 }
 
 AUTO_FIELDS = {"NO.", "미디어코드", "사업년도", "순번", "기관코드", "데이터베이스번호"}
@@ -204,6 +300,20 @@ DEFAULT_ORGANIZATIONS = [
 ]
 
 
+class DataTableWidget(QTableWidget):
+    """Ctrl+V로 엑셀에서 복사한 여러 셀을 한 번에 붙여넣을 수 있는 표."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.paste_requested = None
+
+    def keyPressEvent(self, event):
+        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_V and self.paste_requested:
+            self.paste_requested()
+            return
+        super().keyPressEvent(event)
+
+
 class UploadTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -215,6 +325,8 @@ class UploadTab(QWidget):
         self.species_master_df = pd.DataFrame()
         self.species_name_lookup: dict[str, list[dict[str, Any]]] = {}
         self.master_service = SpeciesMasterService()
+        self.address_master = AddressMasterService()
+        self._last_selected_row: int | None = None
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setSingleShot(True)
         self.autosave_timer.timeout.connect(self.autosave_draft)
@@ -250,21 +362,24 @@ class UploadTab(QWidget):
 
         new_form_button = QPushButton("새 입력")
         new_form_button.clicked.connect(self.clear_form)
-        add_row_button = QPushButton("입력")
-        add_row_button.clicked.connect(self.add_data_row_from_form)
+        import_folder_button = QPushButton("미디어 폴더 불러오기")
+        import_folder_button.clicked.connect(self.import_media_folder)
         update_row_button = QPushButton("선택 행 수정")
         update_row_button.clicked.connect(self.update_selected_data_row)
         delete_row_button = QPushButton("선택 행 삭제")
         delete_row_button.clicked.connect(self.delete_selected_data_rows)
         lookup_species_button = QPushButton("국명 조회")
         lookup_species_button.clicked.connect(self.fill_species_from_korean_name)
+        lookup_address_button = QPushButton("위도/경도로 주소 조회")
+        lookup_address_button.clicked.connect(self.fill_address_from_latlon)
         self.species_status_label = QLabel("")
 
         control_layout.addWidget(new_form_button)
-        control_layout.addWidget(add_row_button)
+        control_layout.addWidget(import_folder_button)
         control_layout.addWidget(update_row_button)
         control_layout.addWidget(delete_row_button)
         control_layout.addWidget(lookup_species_button)
+        control_layout.addWidget(lookup_address_button)
         control_layout.addWidget(self.species_status_label)
         control_layout.addStretch()
         layout.addLayout(control_layout)
@@ -289,13 +404,28 @@ class UploadTab(QWidget):
         scroll_area.setWidget(form_container)
         layout.addWidget(scroll_area, 2)
 
-        self.data_table = QTableWidget(0, len(ROW_COLUMNS))
+        next_row_layout = QHBoxLayout()
+        next_row_layout.addStretch()
+        add_row_button = QPushButton("입력")
+        add_row_button.clicked.connect(self.add_data_row_from_form)
+        next_row_button = QPushButton("다음 행")
+        next_row_button.clicked.connect(self.go_to_next_row)
+        next_row_layout.addWidget(add_row_button)
+        next_row_layout.addWidget(next_row_button)
+        layout.addLayout(next_row_layout)
+
+        self.data_table = DataTableWidget(0, len(ROW_COLUMNS))
         self.data_table.setHorizontalHeaderLabels(ROW_COLUMNS)
         self.data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.data_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self.data_table.itemSelectionChanged.connect(self.load_selected_row_to_form)
         self.data_table.itemChanged.connect(self.on_data_table_item_changed)
-        self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.data_table.paste_requested = self.paste_clipboard_into_table
+        # ponytail: ResizeToContents는 셀 값이 바뀔 때마다 해당 컬럼 전체(수천 행)의
+        # 텍스트 폭을 다시 재는 탓에 행이 많아지면 한 번 쓰기에 10초 이상 걸림.
+        # Interactive로 바꾸고 최초 1회만 폭을 맞춤 (이후 사용자가 드래그로 조절 가능).
+        self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.data_table.resizeColumnsToContents()
         layout.addWidget(self.data_table, 3)
 
         save_layout = QHBoxLayout()
@@ -305,6 +435,10 @@ class UploadTab(QWidget):
         load_draft_button.clicked.connect(self.reload_draft)
         export_button = QPushButton("엑셀로 저장")
         export_button.clicked.connect(self.export_rows_to_excel)
+        import_button = QPushButton("엑셀 불러오기")
+        import_button.clicked.connect(self.load_rows_from_excel)
+        thumbnail_button = QPushButton("동영상 캡처 이미지 생성")
+        thumbnail_button.clicked.connect(self.generate_video_thumbnails)
         clear_button = QPushButton("작성 내용 비우기")
         clear_button.clicked.connect(self.clear_data_rows)
         self.save_status_label = QLabel("")
@@ -313,6 +447,8 @@ class UploadTab(QWidget):
         save_layout.addWidget(save_draft_button)
         save_layout.addWidget(load_draft_button)
         save_layout.addWidget(export_button)
+        save_layout.addWidget(import_button)
+        save_layout.addWidget(thumbnail_button)
         save_layout.addWidget(clear_button)
         save_layout.addWidget(self.save_status_label)
         layout.addLayout(save_layout)
@@ -342,7 +478,13 @@ class UploadTab(QWidget):
             elif column_name in DROPDOWN_OPTIONS:
                 widget = QComboBox()
                 widget.addItems(DROPDOWN_OPTIONS[column_name])
+                if column_name in DROPDOWN_DEFAULTS:
+                    widget.setCurrentText(DROPDOWN_DEFAULTS[column_name])
+                if column_name in {"대륙/해양 국문", "대륙/해양 영문"}:
+                    widget.setEditable(True)
                 widget.currentTextChanged.connect(self.refresh_generated_fields)
+                if column_name == "미디어타입":
+                    widget.currentTextChanged.connect(self.update_media_type_field_visibility)
             else:
                 widget = QLineEdit()
                 if column_name in {"동정년월일", "관찰일"}:
@@ -355,9 +497,29 @@ class UploadTab(QWidget):
                     widget.setPlaceholderText("종정보 마스터의 종고유ID")
                 elif column_name == "미디어파일":
                     widget.setPlaceholderText("원본 미디어 선택 버튼으로 선택")
+                elif column_name in {"동영상 재생시간", "사운드 재생시간"}:
+                    widget.setPlaceholderText("예: 0:45")
+                elif column_name in {"동영상 파일명", "사운드 파일명"}:
+                    widget.setPlaceholderText("미디어 저장 시 자동 입력, 직접 수정 가능")
                 elif column_name == "국명":
                     widget.setPlaceholderText("입력 후 Enter 또는 국명 조회")
                     widget.editingFinished.connect(self.fill_species_from_korean_name)
+                elif column_name in ADDRESS_FIELDS:
+                    if column_name == "관찰위치 상세 국문":
+                        widget.setPlaceholderText("직접 입력 (자동완성 후보 제공, 영문 자동 매칭)")
+                        # ponytail: 12,000여개 후보라 정렬+시작문자 매칭(이진탐색)으로 붙여야
+                        # 타이핑할 때마다 전체를 훑지 않음. 부분일치가 필요해지면 완성도 낮추고
+                        # 후보군 축소(예: 지역 선필터) 후 MatchContains로 되돌리는 걸 고려.
+                        completer = QCompleter(sorted(self.address_master.candidates("detail")), widget)
+                        completer.setCaseSensitivity(Qt.CaseInsensitive)
+                        completer.setModelSorting(QCompleter.CaseInsensitivelySortedModel)
+                        completer.setFilterMode(Qt.MatchStartsWith)
+                        widget.setCompleter(completer)
+                    else:
+                        widget.setPlaceholderText("국문 입력 후 Enter (영문 자동 매칭)")
+                    widget.editingFinished.connect(
+                        lambda field=column_name: self.fill_address_english(field)
+                    )
             if column_name in AUTO_FIELDS:
                 widget.setEnabled(False)
                 if isinstance(widget, QLineEdit):
@@ -375,6 +537,20 @@ class UploadTab(QWidget):
                 self.row_form.addRow(label, media_layout)
             else:
                 self.row_form.addRow(label, widget)
+        self.update_media_type_field_visibility()
+
+    def update_media_type_field_visibility(self, *_):
+        media_type = self.get_form_value("미디어타입")
+        for column_name in VIDEO_FIELDS:
+            self.set_field_row_visible(column_name, media_type == "동영상")
+        for column_name in SOUND_FIELDS:
+            self.set_field_row_visible(column_name, media_type == "사운드")
+
+    def set_field_row_visible(self, column_name: str, visible: bool):
+        widget = self.form_widgets.get(column_name)
+        if widget is None:
+            return
+        self.row_form.setRowVisible(widget, visible)
 
     def _build_project_tab(self) -> QWidget:
         tab = QWidget()
@@ -582,30 +758,65 @@ class UploadTab(QWidget):
         self.set_save_status("선택 행을 수정했습니다.")
 
     def load_selected_row_to_form(self):
+        previous_row = self._last_selected_row
         row = self.current_data_row()
+
+        # 선택 행이 바뀌는 시점에만 이전에 편집하던 폼 내용을 표에 반영
+        # (타이핑 중에는 반영하지 않음 -> 큰 표에서도 입력이 즉시 반응)
+        if previous_row is not None and previous_row != row:
+            values = self.collect_form_values()
+            if self.has_form_content(values):
+                self.write_data_row(previous_row, values)
+
+        self._last_selected_row = row
         if row is None:
             return
         self.autosave_suspended = True
         for col, column_name in enumerate(ROW_COLUMNS):
             item = self.data_table.item(row, col)
-            self.set_form_value(column_name, item.text() if item else "")
+            text = item.text() if item else ""
+            # 사업명 등 세션 유지 값은 그 행에 값이 없으면 지금 폼에 있는 값을 그대로 둠
+            # (예: 첫 행에서 고른 사업명이 다음 빈 행에도 이어짐)
+            if column_name in STICKY_FIELDS and not text:
+                continue
+            self.set_form_value(column_name, text)
         self.autosave_suspended = False
 
     def on_data_table_item_changed(self, item: QTableWidgetItem):
         if self.autosave_suspended:
             return
+        if item.column() == ROW_COLUMNS.index("NO."):
+            self.renumber_rows_below(item.row())
         if item.row() == self.current_data_row():
             self.load_selected_row_to_form()
         self.schedule_autosave()
 
+    def renumber_rows_below(self, changed_row: int):
+        no_column = ROW_COLUMNS.index("NO.")
+        item = self.data_table.item(changed_row, no_column)
+        try:
+            next_no = int(item.text() if item else "") + 1
+        except ValueError:
+            return
+
+        was_blocked = self.data_table.blockSignals(True)
+        try:
+            for row in range(changed_row + 1, self.data_table.rowCount()):
+                self.data_table.setItem(row, no_column, QTableWidgetItem(str(next_no)))
+                next_no += 1
+        finally:
+            self.data_table.blockSignals(was_blocked)
+
     def clear_form(self):
         for column_name in ROW_COLUMNS:
-            if column_name in {"사업명", "사업년도", "순번", "기관명", "기관코드"}:
+            if column_name in STICKY_FIELDS:
                 continue
             if column_name == "NO.":
                 self.set_form_value(column_name, self.next_no_value())
             elif column_name == "관찰개체수":
                 self.set_form_value(column_name, 1)
+            elif column_name in DROPDOWN_DEFAULTS:
+                self.set_form_value(column_name, DROPDOWN_DEFAULTS[column_name])
             else:
                 self.set_form_value(column_name, "")
         self.apply_project_to_form()
@@ -631,6 +842,10 @@ class UploadTab(QWidget):
             "국명",
             "학명",
         ]
+        if values.get("미디어타입") == "동영상":
+            required_fields += VIDEO_FIELDS
+        elif values.get("미디어타입") == "사운드":
+            required_fields += SOUND_FIELDS
         missing = [field for field in required_fields if values.get(field) in ("", 0)]
         if missing:
             QMessageBox.warning(self, "입력 확인", f"필수값을 입력해 주세요: {', '.join(missing)}")
@@ -678,6 +893,139 @@ class UploadTab(QWidget):
         else:
             self.set_species_status("마스터 적용 완료")
 
+    def fill_address_english(self, korean_field: str):
+        english_field, level = ADDRESS_FIELDS[korean_field]
+        korean_text = normalize_text(self.get_form_value(korean_field))
+        if not korean_text:
+            return
+
+        english_text, exact = self.address_master.match_english(level, korean_text)
+        if not english_text:
+            self.set_save_status(f"{korean_field}: 주소 마스터에 없음 (직접 입력 필요)")
+            return
+
+        self.set_form_value(english_field, english_text)
+        if exact:
+            self.set_save_status(f"{korean_field} → {english_text} 자동 적용")
+        else:
+            self.set_save_status(f"{korean_field} → {english_text} (유사 매칭, 확인 필요)")
+
+    def fill_address_from_latlon(self):
+        latitude = self.to_float(self.get_form_value("위도"))
+        longitude = self.to_float(self.get_form_value("경도"))
+        if latitude is None or longitude is None:
+            QMessageBox.warning(self, "주소 조회", "위도/경도를 먼저 입력해 주세요.")
+            return
+
+        try:
+            address_ko = self.reverse_geocode(latitude, longitude, "ko")
+            address_en = self.reverse_geocode(latitude, longitude, "en")
+        except Exception as exc:
+            self.set_save_status(f"주소 조회 실패: {exc}")
+            return
+
+        if not address_ko:
+            self.set_save_status("주소 조회 결과가 없습니다.")
+            return
+
+        for korean_field, english_field, key in (
+            ("관찰위치 시도 국문", "관찰위치 시도 영문", "sido"),
+            ("관찰위치 시군구 국문", "관찰위치 시군구 영문", "sigungu"),
+            ("관찰위치 읍면동 국문", "관찰위치 읍면동 영문", "eupmyeondong"),
+        ):
+            korean_value = address_ko.get(key, "")
+            if not korean_value:
+                continue
+            self.set_form_value(korean_field, korean_value)
+
+            # API가 영문명을 따로 주면 그걸 바로 쓰고, 못 주면(=한글을 그대로 돌려주면)
+            # 기존 주소 마스터 국->영 매칭으로 대체 채움
+            english_value = address_en.get(key, "")
+            if english_value and english_value != korean_value:
+                self.set_form_value(english_field, english_value)
+            else:
+                self.fill_address_english(korean_field)
+
+        self.set_save_status("위도/경도 기반 주소를 조회했습니다. (OpenStreetMap Nominatim, 내용 확인 필요)")
+
+    @staticmethod
+    def reverse_geocode(latitude: float, longitude: float, language: str = "ko") -> dict[str, str]:
+        # ponytail: Nominatim 무료 API(키 불필요, 초당 1건 제한). 정확도가 중요하면
+        # 공공데이터포털/브이월드 좌표->주소 API(키 발급 필요)로 교체.
+        params = urllib.parse.urlencode(
+            {
+                "format": "jsonv2",
+                "lat": latitude,
+                "lon": longitude,
+                "zoom": 14,
+                "addressdetails": 1,
+                "accept-language": language,
+            }
+        )
+        request = urllib.request.Request(
+            f"https://nominatim.openstreetmap.org/reverse?{params}",
+            headers={"User-Agent": "BioFlow-species-upload/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        address = data.get("address", {})
+        return {
+            "sido": normalize_text(address.get("state") or address.get("province")),
+            "sigungu": normalize_text(
+                address.get("city") or address.get("county") or address.get("borough")
+            ),
+            "eupmyeondong": normalize_text(
+                address.get("town") or address.get("suburb") or address.get("village") or address.get("quarter")
+            ),
+        }
+
+    def import_media_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "미디어 폴더 선택", "")
+        if not folder:
+            return
+
+        media_files = self.scan_media_folder(Path(folder))
+        if not media_files:
+            QMessageBox.information(self, "폴더 불러오기", "지원하는 이미지/동영상/사운드 파일을 찾지 못했습니다.")
+            return
+
+        self.autosave_suspended = True
+        try:
+            # 폼에 이전에 작성하던 국명/학명 등 내용이 남아있으면 새로 만드는 모든 행에
+            # 그대로 찍혀버리므로, 사업명/기관/분류코드/미디어타입만 남기고 비운 뒤 시작
+            self.clear_form()
+            for file_path, media_type in media_files:
+                self.set_form_value("미디어타입", media_type)
+                self.set_form_value("NO.", self.next_no_value())
+                self.set_form_value("미디어파일", str(file_path))
+                self.apply_location_from_media(file_path, media_type)
+                self.apply_duration_from_media(file_path, media_type)
+                self.apply_date_from_media(file_path, media_type)
+                self.add_data_row(self.collect_form_values())
+        finally:
+            self.autosave_suspended = False
+
+        self.autosave_draft()
+        QMessageBox.information(
+            self,
+            "폴더 불러오기",
+            f"{len(media_files)}건의 미디어를 행으로 추가했습니다.\n"
+            "각 행을 선택해 종명 등 나머지 정보를 입력한 뒤 '선택 행 수정'으로 저장해 주세요.",
+        )
+        self.set_save_status(f"폴더 불러오기 완료: {len(media_files)}건 (나머지 정보 입력 필요)")
+
+    @staticmethod
+    def scan_media_folder(folder: Path) -> list[tuple[Path, str]]:
+        media_files = []
+        for path in sorted(folder.iterdir()):
+            if not path.is_file():
+                continue
+            media_type = MEDIA_EXTENSION_TYPES.get(path.suffix.lower())
+            if media_type:
+                media_files.append((path, media_type))
+        return media_files
+
     def select_media_source_file(self):
         media_type = self.get_form_value("미디어타입")
         file_filter = self.media_file_filter(media_type)
@@ -687,6 +1035,8 @@ class UploadTab(QWidget):
 
         self.set_form_value("미디어파일", file_path)
         self.apply_location_from_media(Path(file_path), media_type)
+        self.apply_duration_from_media(Path(file_path), media_type)
+        self.apply_date_from_media(Path(file_path), media_type)
         self.schedule_autosave()
 
     def apply_location_from_media(self, source_path: Path, media_type: str):
@@ -698,6 +1048,99 @@ class UploadTab(QWidget):
         self.set_form_value("위도", f"{latitude:.7f}")
         self.set_form_value("경도", f"{longitude:.7f}")
         self.set_save_status(f"미디어 위치정보 적용: 위도 {latitude:.7f}, 경도 {longitude:.7f}")
+
+    def apply_duration_from_media(self, source_path: Path, media_type: str):
+        duration_field = {"동영상": "동영상 재생시간", "사운드": "사운드 재생시간"}.get(media_type)
+        if not duration_field:
+            return
+        duration_text = self.extract_media_duration(source_path)
+        if duration_text:
+            self.set_form_value(duration_field, duration_text)
+
+    @staticmethod
+    def run_json_command(command: list[str], timeout: int, empty_json: str) -> Any:
+        # ponytail: ffprobe/exiftool emit UTF-8 JSON; on Korean Windows the platform
+        # default (cp949) can't decode it, so encoding must be pinned here explicitly.
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+            )
+            return json.loads(result.stdout or empty_json)
+        except Exception:
+            return json.loads(empty_json)
+
+    @staticmethod
+    def extract_media_duration(file_path: Path) -> str:
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return ""
+        data = UploadTab.run_json_command(
+            [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)],
+            timeout=10,
+            empty_json="{}",
+        )
+
+        duration = UploadTab.to_float(data.get("format", {}).get("duration"))
+        if duration is None:
+            return ""
+
+        total_seconds = int(round(duration))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes}:{seconds:02d}"
+
+    def apply_date_from_media(self, source_path: Path, media_type: str):
+        date_text = self.extract_media_date(source_path, media_type)
+        if date_text:
+            self.set_form_value("관찰일", date_text)
+
+    @staticmethod
+    def extract_media_date(file_path: Path, media_type: str) -> str:
+        if media_type == "이미지":
+            date_text = UploadTab.extract_image_date(file_path)
+            if date_text:
+                return date_text
+        return UploadTab.extract_media_date_with_ffprobe(file_path)
+
+    @staticmethod
+    def extract_image_date(file_path: Path) -> str:
+        if Image is None or ExifTags is None:
+            return ""
+        try:
+            with Image.open(file_path) as image:
+                exif = image.getexif()
+                raw = exif.get(36867) or exif.get(306)  # DateTimeOriginal / DateTime
+        except Exception:
+            return ""
+        if not raw:
+            return ""
+        date_part = str(raw).split(" ")[0]  # "YYYY:MM:DD HH:MM:SS" -> "YYYY:MM:DD"
+        if date_part.count(":") != 2:
+            return ""
+        return date_part.replace(":", "-")
+
+    @staticmethod
+    def extract_media_date_with_ffprobe(file_path: Path) -> str:
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return ""
+        data = UploadTab.run_json_command(
+            [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)],
+            timeout=10,
+            empty_json="{}",
+        )
+        creation_time = data.get("format", {}).get("tags", {}).get("creation_time")
+        if not creation_time:
+            return ""
+        return str(creation_time).split("T")[0]
 
     def prepare_media_for_record(self, values: dict[str, Any]) -> dict[str, Any]:
         media_path_text = normalize_text(values.get("미디어파일"))
@@ -716,6 +1159,11 @@ class UploadTab(QWidget):
             self.apply_location_from_media(saved_path, values.get("미디어타입", ""))
             values["위도"] = self.get_form_value("위도")
             values["경도"] = self.get_form_value("경도")
+
+            filename_field = {"동영상": "동영상 파일명", "사운드": "사운드 파일명"}.get(values.get("미디어타입"))
+            if filename_field:
+                values[filename_field] = saved_path.name
+                self.set_form_value(filename_field, saved_path.name)
         return values
 
     def select_media_storage_dir(self):
@@ -756,13 +1204,75 @@ class UploadTab(QWidget):
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
             target_path = self.unique_media_path(target_dir, expected_stem, source_path.suffix.lower())
+            t0 = time.perf_counter()
             shutil.copy2(source_path, target_path)
+            logger.info(
+                "save_media_file_to_storage: copy %.3fs (%d bytes) -> %s",
+                time.perf_counter() - t0,
+                source_path.stat().st_size,
+                target_path,
+            )
+            # ponytail: 동영상 캡처(ffmpeg 프로세스 실행)는 행 하나 저장할 때마다 부르면
+            # 무거워서 UI가 멈춤 -> 여기서는 안 하고, "동영상 캡처 이미지 생성" 버튼으로
+            # 한번에 일괄 처리(generate_video_thumbnails)하도록 분리.
             self.set_save_status(f"미디어 저장 완료: {target_path}")
             return target_path
         except Exception as exc:
             QMessageBox.critical(self, "미디어 저장 실패", str(exc))
             self.set_save_status(f"미디어 저장 실패: {exc}")
             return None
+
+    @staticmethod
+    def capture_video_thumbnail(video_path: Path, output_path: Path, at_seconds: float = 1.0) -> bool:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return False
+        try:
+            result = subprocess.run(
+                [ffmpeg, "-y", "-ss", str(at_seconds), "-i", str(video_path), "-frames:v", "1", str(output_path)],
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
+        except Exception:
+            return False
+        return result.returncode == 0 and output_path.exists()
+
+    def generate_video_thumbnails(self):
+        media_column = ROW_COLUMNS.index("미디어파일")
+        type_column = ROW_COLUMNS.index("미디어타입")
+
+        video_paths = []
+        for row in range(self.data_table.rowCount()):
+            type_item = self.data_table.item(row, type_column)
+            media_item = self.data_table.item(row, media_column)
+            if not type_item or type_item.text() != "동영상":
+                continue
+            if not media_item or not media_item.text():
+                continue
+            video_path = Path(media_item.text())
+            if video_path.exists():
+                video_paths.append(video_path)
+
+        if not video_paths:
+            QMessageBox.information(self, "동영상 캡처", "캡처할 동영상 행이 없습니다 (미디어 저장이 먼저 필요합니다).")
+            return
+
+        success, skipped, failed = 0, 0, 0
+        for video_path in video_paths:
+            thumbnail_path = video_path.with_suffix(".jpg")
+            if thumbnail_path.exists():
+                skipped += 1
+                continue
+            if self.capture_video_thumbnail(video_path, thumbnail_path):
+                success += 1
+            else:
+                failed += 1
+
+        QMessageBox.information(
+            self, "동영상 캡처", f"완료: {success}건 생성, {skipped}건 이미 있음, {failed}건 실패(ffmpeg 필요)."
+        )
+        self.set_save_status(f"동영상 캡처 이미지 생성 완료: {success}건 생성 / {failed}건 실패")
 
     @staticmethod
     def safe_filename(value: str) -> str:
@@ -845,17 +1355,7 @@ class UploadTab(QWidget):
         exiftool = shutil.which("exiftool")
         if not exiftool:
             return None, None
-        try:
-            result = subprocess.run(
-                [exiftool, "-j", "-n", str(file_path)],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            data = json.loads(result.stdout or "[]")
-        except Exception:
-            return None, None
+        data = UploadTab.run_json_command([exiftool, "-j", "-n", str(file_path)], timeout=10, empty_json="[]")
 
         if not data:
             return None, None
@@ -867,17 +1367,11 @@ class UploadTab(QWidget):
         ffprobe = shutil.which("ffprobe")
         if not ffprobe:
             return None, None
-        try:
-            result = subprocess.run(
-                [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            data = json.loads(result.stdout or "{}")
-        except Exception:
-            return None, None
+        data = UploadTab.run_json_command(
+            [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)],
+            timeout=10,
+            empty_json="{}",
+        )
 
         tags = data.get("format", {}).get("tags", {})
         location = tags.get("location") or tags.get("com.apple.quicktime.location.ISO6709")
@@ -916,6 +1410,67 @@ class UploadTab(QWidget):
         if not indexes:
             return None
         return indexes[0].row()
+
+    def paste_clipboard_into_table(self):
+        text = QApplication.clipboard().text()
+        if not text:
+            return
+
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        if not lines:
+            return
+        rows = [line.split("\t") for line in lines]
+
+        row = self.current_data_row()
+        start_row = 0 if row is None else row
+        start_col = self.data_table.currentColumn()
+        start_col = 0 if start_col < 0 else start_col
+
+        was_blocked = self.data_table.blockSignals(True)
+        try:
+            for row_offset, row_values in enumerate(rows):
+                target_row = start_row + row_offset
+                while target_row >= self.data_table.rowCount():
+                    self.data_table.insertRow(self.data_table.rowCount())
+                for col_offset, value in enumerate(row_values):
+                    target_col = start_col + col_offset
+                    if target_col >= len(ROW_COLUMNS):
+                        break
+                    self.data_table.setItem(target_row, target_col, QTableWidgetItem(value))
+        finally:
+            self.data_table.blockSignals(was_blocked)
+
+        self.autosave_draft()
+        self.set_save_status(f"붙여넣기 완료: {len(rows)}행")
+
+    def go_to_next_row(self):
+        total = self.data_table.rowCount()
+        if total == 0:
+            self.set_save_status("작성된 행이 없습니다.")
+            return
+
+        row = self.current_data_row()
+        if row is None and self._last_selected_row is None:
+            values = self.collect_form_values()
+            if self.has_form_content(values):
+                reply = QMessageBox.question(
+                    self,
+                    "다음 행",
+                    "'입력'으로 저장하지 않은 작성 중인 내용이 있습니다. "
+                    "행을 선택하면 지금 작성 중인 내용은 사라집니다. 계속할까요?",
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    return
+
+        next_row = 0 if row is None else row + 1
+        if next_row >= total:
+            self.set_save_status("마지막 행입니다.")
+            return
+
+        self.data_table.selectRow(next_row)
 
     def delete_selected_data_rows(self):
         rows = sorted({index.row() for index in self.data_table.selectedIndexes()}, reverse=True)
@@ -1046,12 +1601,64 @@ class UploadTab(QWidget):
 
         try:
             self.write_excel_file(file_path, records)
-            self.excel_file_path = file_path
-            self.write_draft(records, self.collect_form_values())
-            self.set_save_status(f"엑셀 저장 및 자동반영 설정: {file_path}")
-            QMessageBox.information(self, "엑셀 저장", f"신규 데이터 엑셀을 저장했습니다.\n{file_path}")
+            final_path = self.final_excel_path(file_path)
+            self.write_final_excel_file(str(final_path), records)
+            self.reset_after_export()
+            QMessageBox.information(
+                self,
+                "엑셀 저장",
+                f"신규 데이터 엑셀을 저장했습니다.\n{file_path}\n{final_path}\n\n"
+                "작성 중이던 내용은 초기화되어 NO.가 1부터 다시 시작됩니다.",
+            )
         except Exception as exc:
             QMessageBox.critical(self, "엑셀 저장 실패", str(exc))
+
+    def reset_after_export(self):
+        self.autosave_suspended = True
+        try:
+            self.data_table.setRowCount(0)
+        finally:
+            self.autosave_suspended = False
+        self.excel_file_path = ""
+        self.clear_form()
+        self.write_draft([], self.collect_form_values())
+        self.set_save_status("엑셀 저장 완료. 새 작성을 시작합니다 (NO. 1부터).")
+
+    def load_rows_from_excel(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "신규 데이터 엑셀 불러오기", "", "Excel Files (*.xlsx)")
+        if not file_path:
+            return
+
+        try:
+            df = pd.read_excel(file_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "엑셀 불러오기 실패", str(exc))
+            return
+
+        missing_columns = [column for column in ROW_COLUMNS if column not in df.columns]
+        if missing_columns:
+            QMessageBox.warning(
+                self, "엑셀 불러오기", f"'작성한 그대로' 형식의 엑셀이 아닙니다. 없는 컬럼: {', '.join(missing_columns)}"
+            )
+            return
+
+        if self.data_table.rowCount() > 0:
+            reply = QMessageBox.question(self, "엑셀 불러오기", "현재 작성 중인 내용을 지우고 불러올까요?")
+            if reply != QMessageBox.Yes:
+                return
+
+        self.autosave_suspended = True
+        try:
+            self.data_table.setRowCount(0)
+            for _, row in df.iterrows():
+                record = {column: self.clean_master_value(row[column]) for column in ROW_COLUMNS}
+                self.add_data_row(record)
+        finally:
+            self.autosave_suspended = False
+
+        self.excel_file_path = file_path
+        self.autosave_draft()
+        self.set_save_status(f"엑셀 불러오기 완료: {file_path} ({len(df)}건)")
 
     def sync_current_form_to_table(self):
         values = self.collect_form_values()
@@ -1100,20 +1707,37 @@ class UploadTab(QWidget):
     def autosave_draft(self):
         if self.autosave_suspended or not hasattr(self, "data_table") or not self.form_widgets:
             return
+        start = time.perf_counter()
         self.autosave_suspended = True
         try:
-            row = self.current_data_row()
-            if row is not None:
-                values = self.collect_form_values()
-                if self.has_form_content(values):
-                    self.write_data_row(row, values)
+            # ponytail: 현재 선택 행에 폼 내용을 반영하는 건 여기서 하지 않음 -> 행 선택이
+            # 바뀔 때(load_selected_row_to_form)만 반영. 타이핑 중 매번 표에 되쓰면 행이
+            # 많을 때 컬럼폭 재계산 등으로 느려짐. 임시저장 JSON엔 현재 폼 값이 별도 저장되어
+            # 유실 없음.
+            t_row_done = time.perf_counter()
+
             records = self.table_to_records(self.data_table, ROW_COLUMNS)
+            t_records_done = time.perf_counter()
+
+            # ponytail: 엑셀(원본+완성본) 재작성은 여기서 하지 않음 - 입력할 때마다(700ms
+            # 디바운스) 전체 표를 xlsx로 다시 쓰면 행이 많아질수록 저장 중 UI가 멈춤.
+            # 임시저장 JSON만으로 복구는 충분하고, 엑셀 반영은 "작성 내용 저장"/"엑셀로 저장"
+            # 같은 명시적 클릭 시에만 수행.
             self.write_draft(
                 records,
                 self.collect_form_values(),
             )
-            self.write_current_excel(records)
+            t_draft_done = time.perf_counter()
+
             self.set_save_status("자동 임시저장 완료")
+            logger.info(
+                "autosave_draft: rows=%d row_write=%.3fs table_to_records=%.3fs draft_write=%.3fs total=%.3fs",
+                len(records),
+                t_row_done - start,
+                t_records_done - t_row_done,
+                t_draft_done - t_records_done,
+                t_draft_done - start,
+            )
         finally:
             self.autosave_suspended = False
 
@@ -1147,6 +1771,7 @@ class UploadTab(QWidget):
             return
         try:
             self.write_excel_file(self.excel_file_path, records)
+            self.write_final_excel_file(str(self.final_excel_path(self.excel_file_path)), records)
             self.set_save_status(f"엑셀 자동반영 완료: {self.excel_file_path}")
         except Exception as exc:
             self.set_save_status(f"엑셀 자동반영 실패: {exc}")
@@ -1154,6 +1779,20 @@ class UploadTab(QWidget):
     @staticmethod
     def write_excel_file(file_path: str, records: list[dict[str, Any]]):
         pd.DataFrame(records, columns=ROW_COLUMNS).to_excel(file_path, index=False)
+
+    @staticmethod
+    def final_excel_path(file_path: str) -> Path:
+        path = Path(file_path)
+        return path.with_name(f"{path.stem}_완성본{path.suffix}")
+
+    @staticmethod
+    def write_final_excel_file(file_path: str, records: list[dict[str, Any]]):
+        final_records = [
+            {target: (record.get(source, "") if source else "") for target, source in FINAL_EXPORT_COLUMNS}
+            for record in records
+        ]
+        final_columns = [target for target, _ in FINAL_EXPORT_COLUMNS]
+        pd.DataFrame(final_records, columns=final_columns).to_excel(file_path, index=False)
 
     def populate_reference_table(self, table: QTableWidget, records: list[dict[str, Any]], columns: list[str]):
         table.setRowCount(0)
