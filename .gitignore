@@ -46,7 +46,16 @@ Thumbs.db
 *.xlsm
 
 # 임시 데이터
-data/
+# ponytail: data/ 전체를 트레일링 슬래시로 막으면 git이 하위로 아예 안 내려가서 !로
+# 특정 파일만 되살릴 수 없음 -> data/*로 한 단계씩만 막고 필요한 항목만 명시적으로 되살림
+data/*
+!data/version.json
+!data/master/
+data/master/*
+!data/master/species_master.xlsx
+!data/institution/
+data/institution/*
+!data/institution/institution.json
 output/
 temp/
 cache/
