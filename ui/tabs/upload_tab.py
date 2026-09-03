@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from PySide6.QtCore import QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QCursor
+from PySide6.QtCore import QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QCursor, QPixmap
 
 logger = logging.getLogger("bioflow.upload_tab")
 from PySide6.QtWidgets import (
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QCompleter,
+    QDialog,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -474,6 +475,97 @@ DEFAULT_ORGANIZATIONS = [
 FILL_HANDLE_SIZE = 6
 
 
+class ThumbnailLabel(QLabel):
+    """미리보기 썸네일. 이미지가 표시돼 있을 때 클릭하면 팝업으로 확대해서 보여줌."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._source_path = ""
+
+    def set_source_path(self, path: str):
+        self._source_path = path
+        self.setCursor(Qt.PointingHandCursor if path else Qt.ArrowCursor)
+        self.setToolTip("클릭하면 크게 보기" if path else "")
+
+    def mousePressEvent(self, event):
+        if self._source_path:
+            self._show_popup()
+            return
+        super().mousePressEvent(event)
+
+    def _show_popup(self):
+        pixmap = QPixmap(self._source_path)
+        if pixmap.isNull():
+            return
+        ImagePreviewDialog(pixmap, Path(self._source_path).name, self).exec()
+
+
+class ImagePreviewDialog(QDialog):
+    """확대/축소(휠, 버튼)와 원본 100% 보기, 화면에 맞춤을 지원하는 이미지 미리보기 팝업."""
+
+    ZOOM_MIN = 0.1
+    ZOOM_MAX = 5.0
+    ZOOM_STEP = 1.25
+
+    def __init__(self, pixmap: QPixmap, title: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self._pixmap = pixmap
+        self._zoom = 1.0
+
+        layout = QVBoxLayout(self)
+
+        controls = QHBoxLayout()
+        zoom_out_button = QPushButton("축소(-)")
+        zoom_out_button.clicked.connect(lambda: self.set_zoom(self._zoom / self.ZOOM_STEP))
+        zoom_in_button = QPushButton("확대(+)")
+        zoom_in_button.clicked.connect(lambda: self.set_zoom(self._zoom * self.ZOOM_STEP))
+        actual_size_button = QPushButton("원본 크기(100%)")
+        actual_size_button.clicked.connect(lambda: self.set_zoom(1.0))
+        fit_button = QPushButton("화면에 맞춤")
+        fit_button.clicked.connect(self.fit_to_view)
+        self.zoom_status_label = QLabel("")
+        controls.addWidget(zoom_out_button)
+        controls.addWidget(zoom_in_button)
+        controls.addWidget(actual_size_button)
+        controls.addWidget(fit_button)
+        controls.addWidget(self.zoom_status_label)
+        controls.addStretch()
+        layout.addLayout(controls)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(False)
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.scroll_area.setWidget(self.image_label)
+        layout.addWidget(self.scroll_area, 1)
+
+        screen = QApplication.primaryScreen()
+        window_size = (screen.availableSize() * 0.8) if screen else QSize(1000, 800)
+        self.resize(window_size)
+
+        self.fit_to_view()
+
+    def set_zoom(self, zoom: float):
+        self._zoom = max(self.ZOOM_MIN, min(zoom, self.ZOOM_MAX))
+        scaled = self._pixmap.scaled(
+            self._pixmap.size() * self._zoom, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled)
+        self.image_label.resize(scaled.size())
+        self.zoom_status_label.setText(f"{round(self._zoom * 100)}%")
+
+    def fit_to_view(self):
+        viewport = self.scroll_area.viewport().size()
+        if self._pixmap.width() <= 0 or self._pixmap.height() <= 0:
+            return
+        zoom = min(viewport.width() / self._pixmap.width(), viewport.height() / self._pixmap.height(), 1.0)
+        self.set_zoom(zoom)
+
+    def wheelEvent(self, event):
+        self.set_zoom(self._zoom * (self.ZOOM_STEP if event.angleDelta().y() > 0 else 1 / self.ZOOM_STEP))
+
+
 class DataTableWidget(QTableWidget):
     """Ctrl+V로 엑셀에서 복사한 여러 셀을 한 번에 붙여넣거나, 선택 영역 우측 하단
     모서리를 드래그해서 값을 위/아래로 복사(엑셀 채우기 핸들과 비슷하되 단순 복사만 지원)."""
@@ -836,12 +928,19 @@ class UploadTab(QWidget):
                 # "파일명"은 별도 컬럼(read-only)이지만 "파일경로"가 바뀔 때마다
                 # 자동으로 따라가도록 여기서 연결(sync_media_filename_field)
                 widget.textChanged.connect(self.sync_media_filename_field)
+                widget.textChanged.connect(self.update_media_thumbnail)
                 media_layout = QHBoxLayout()
                 media_layout.addWidget(widget, 1)
                 select_media_button = QPushButton("원본 선택")
                 select_media_button.clicked.connect(self.select_media_source_file)
                 media_layout.addWidget(select_media_button)
                 self.row_form.addRow(label, media_layout)
+
+                self.media_thumbnail_label = ThumbnailLabel()
+                self.media_thumbnail_label.setFixedSize(180, 180)
+                self.media_thumbnail_label.setAlignment(Qt.AlignCenter)
+                self.media_thumbnail_label.setStyleSheet("border: 1px solid #ccc; background: #fafafa;")
+                self.row_form.addRow("미리보기", self.media_thumbnail_label)
             else:
                 self.row_form.addRow(label, widget)
         self.update_media_type_field_visibility()
@@ -849,6 +948,34 @@ class UploadTab(QWidget):
     def sync_media_filename_field(self, *_):
         value = self.get_form_value("파일경로")
         self.set_form_value("파일명", Path(value).name if value else "")
+
+    def update_media_thumbnail(self, *_):
+        self.render_media_thumbnail(self.media_thumbnail_label, self.get_form_value("파일경로"))
+
+    @staticmethod
+    def render_media_thumbnail(label: ThumbnailLabel, file_path_text: str):
+        if not file_path_text:
+            label.clear()
+            label.set_source_path("")
+            return
+
+        path = Path(file_path_text)
+        media_type = MEDIA_EXTENSION_TYPES.get(path.suffix.lower())
+        image_path = path if media_type == "이미지" else path.with_suffix(".jpg") if media_type == "동영상" else None
+
+        pixmap = QPixmap(str(image_path)) if image_path and image_path.exists() else None
+        if pixmap and not pixmap.isNull():
+            label.setPixmap(pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            label.set_source_path(str(image_path))
+        elif media_type == "동영상":
+            label.setText("🎬 동영상\n(캡처 이미지 없음 -\n'동영상 캡처 이미지 생성' 이용)")
+            label.set_source_path("")
+        elif media_type == "사운드":
+            label.setText("🔊 사운드 파일")
+            label.set_source_path("")
+        else:
+            label.setText("미리보기 불가")
+            label.set_source_path("")
 
     @staticmethod
     def normalize_date_text(text: str) -> str:
@@ -1066,12 +1193,19 @@ class UploadTab(QWidget):
             self.connect_specimen_autosave_signal(widget)
             if column_name == "파일경로":
                 widget.textChanged.connect(self.sync_specimen_media_filename_field)
+                widget.textChanged.connect(self.update_specimen_media_thumbnail)
                 media_layout = QHBoxLayout()
                 media_layout.addWidget(widget, 1)
                 select_media_button = QPushButton("원본 선택")
                 select_media_button.clicked.connect(self.select_specimen_image_source_file)
                 media_layout.addWidget(select_media_button)
                 self.specimen_row_form.addRow(label, media_layout)
+
+                self.specimen_media_thumbnail_label = ThumbnailLabel()
+                self.specimen_media_thumbnail_label.setFixedSize(180, 180)
+                self.specimen_media_thumbnail_label.setAlignment(Qt.AlignCenter)
+                self.specimen_media_thumbnail_label.setStyleSheet("border: 1px solid #ccc; background: #fafafa;")
+                self.specimen_row_form.addRow("미리보기", self.specimen_media_thumbnail_label)
             else:
                 self.specimen_row_form.addRow(label, widget)
 
@@ -1208,10 +1342,9 @@ class UploadTab(QWidget):
             return
 
         self.set_form_value("파일경로", file_path, self.specimen_form_widgets)
-        # 새 원본 파일을 다시 고른 것이므로, 이전 행에 기록돼 있던 원본 정보는 비워서
-        # 다음 저장 때 이번에 고른 파일로 새로 기록되게 함
-        self.set_form_value("원본경로", "", self.specimen_form_widgets)
-        self.set_form_value("원본파일명", "", self.specimen_form_widgets)
+        # 새로 고른 원본 파일 정보를 바로 기록 (저장 시 파일경로/파일명만 새 저장위치로 바뀜)
+        self.set_form_value("원본경로", file_path, self.specimen_form_widgets)
+        self.set_form_value("원본파일명", Path(file_path).name, self.specimen_form_widgets)
         self.apply_location_from_specimen_media(Path(file_path))
         self.apply_date_from_specimen_media(Path(file_path))
         self.schedule_specimen_autosave()
@@ -1256,6 +1389,41 @@ class UploadTab(QWidget):
             values["위도"] = self.get_form_value("위도", self.specimen_form_widgets)
             values["경도"] = self.get_form_value("경도", self.specimen_form_widgets)
         return values
+
+    def apply_media_copy_to_specimen_row_values(self, values: dict[str, Any]) -> dict[str, Any]:
+        media_path_text = normalize_text(values.get("파일경로"))
+        if not media_path_text:
+            return values
+
+        source_path = Path(media_path_text)
+        if not source_path.exists():
+            return values
+
+        saved_path = self.save_specimen_media_file_to_storage(source_path, values)
+        if not saved_path:
+            return values
+
+        values = values.copy()
+        if not normalize_text(values.get("원본경로")):
+            values["원본경로"] = str(source_path)
+            values["원본파일명"] = source_path.name
+        values["파일경로"] = str(saved_path)
+        values["파일명"] = saved_path.name
+        latitude, longitude, _ = self.extract_location_from_media(saved_path, "이미지")
+        if latitude is not None and longitude is not None:
+            values["위도"] = f"{latitude:.7f}"
+            values["경도"] = f"{longitude:.7f}"
+        return values
+
+    def copy_pending_media_for_all_specimen_rows(self):
+        for row in range(self.specimen_data_table.rowCount()):
+            values = {
+                column: (self.specimen_data_table.item(row, col).text() if self.specimen_data_table.item(row, col) else "")
+                for col, column in enumerate(SPECIMEN_ROW_COLUMNS)
+            }
+            updated = self.apply_media_copy_to_specimen_row_values(values)
+            if updated is not values:
+                self.write_specimen_data_row(row, updated)
 
     def select_specimen_media_storage_dir(self):
         selected_dir = QFileDialog.getExistingDirectory(
@@ -1404,18 +1572,26 @@ class UploadTab(QWidget):
         finally:
             self.specimen_data_table.blockSignals(was_blocked)
 
+    @staticmethod
+    def default_specimen_field_value(column_name: str) -> Any:
+        if column_name in SPECIMEN_DROPDOWN_DEFAULTS:
+            return SPECIMEN_DROPDOWN_DEFAULTS[column_name]
+        if column_name in TEXT_DEFAULTS:
+            return TEXT_DEFAULTS[column_name]
+        if column_name in SPECIMEN_DROPDOWN_OPTIONS and SPECIMEN_DROPDOWN_OPTIONS[column_name]:
+            return SPECIMEN_DROPDOWN_OPTIONS[column_name][0]
+        return ""
+
     def clear_specimen_form(self):
         for column_name in SPECIMEN_ROW_COLUMNS:
             if column_name in SPECIMEN_STICKY_FIELDS:
                 continue
             if column_name == "NO.":
                 self.set_form_value(column_name, self.next_specimen_no_value(), self.specimen_form_widgets)
-            elif column_name in SPECIMEN_DROPDOWN_DEFAULTS:
-                self.set_form_value(column_name, SPECIMEN_DROPDOWN_DEFAULTS[column_name], self.specimen_form_widgets)
-            elif column_name in TEXT_DEFAULTS:
-                self.set_form_value(column_name, TEXT_DEFAULTS[column_name], self.specimen_form_widgets)
             else:
-                self.set_form_value(column_name, "", self.specimen_form_widgets)
+                self.set_form_value(
+                    column_name, self.default_specimen_field_value(column_name), self.specimen_form_widgets
+                )
         self.reset_specimen_taxon_edit_tracking()
         self.apply_specimen_project_to_form()
         self.set_default_organization(self.specimen_form_widgets)
@@ -1440,8 +1616,8 @@ class UploadTab(QWidget):
         return True
 
     def prepare_next_specimen_input(self, values: dict[str, Any]):
-        self.set_form_value("NO.", self.next_specimen_no_value(), self.specimen_form_widgets)
-        self.refresh_specimen_generated_fields()
+        # 관찰 탭과 동일한 이유로 "새 입력"과 동일하게 폼을 완전히 리셋
+        self.clear_specimen_form()
 
     def next_specimen_no_value(self) -> int:
         max_no = 0
@@ -1553,39 +1729,28 @@ class UploadTab(QWidget):
             self.autosave_specimen_draft()
 
     def has_specimen_form_content(self, values: dict[str, Any]) -> bool:
-        ignored_fields = {"사업명", "사업년도", "순번", "기관명", "기관코드", "데이터베이스번호"}
+        # has_form_content와 동일한 이유로 default_specimen_field_value와 직접 비교
+        ignored_fields = SPECIMEN_STICKY_FIELDS | {"NO.", "데이터베이스번호"}
         for key, value in values.items():
             if key in ignored_fields:
                 continue
-            if value not in ("", 0):
-                return True
-        return False
-
-    def is_duplicate_specimen_record(self, values: dict[str, Any]) -> bool:
-        current = {
-            column: "" if values.get(column) is None else str(values.get(column, "")) for column in SPECIMEN_ROW_COLUMNS
-        }
-        for record in self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS):
-            existing = {
-                column: "" if record.get(column) is None else str(record.get(column, "")) for column in SPECIMEN_ROW_COLUMNS
-            }
-            if existing == current:
+            normalized = value if value is not None else ""
+            if str(normalized) != str(self.default_specimen_field_value(key)):
                 return True
         return False
 
     def sync_current_specimen_form_to_table(self):
+        # 선택된 행이 있을 때만 그 행에 지금 폼 내용을 반영. 새 행 추가는 "입력" 버튼으로만
+        # 하도록 함 - 예전엔 선택 없을 때 폼 내용으로 새 행을 추측해서 만들었는데, 그게
+        # 저장(임시저장/엑셀로 저장) 시 의도치 않은 중복 행이 생기는 원인이었음.
+        row = self.current_specimen_data_row()
+        if row is None:
+            return
         values = self.collect_specimen_form_values()
         if not self.has_specimen_form_content(values):
             return
         values = self.prepare_image_for_specimen_record(values)
-
-        row = self.current_specimen_data_row()
-        if row is not None:
-            self.write_specimen_data_row(row, values)
-            return
-
-        if not self.is_duplicate_specimen_record(values):
-            self.add_specimen_data_row(values)
+        self.write_specimen_data_row(row, values)
 
     def connect_specimen_autosave_signal(self, widget: QLineEdit | QComboBox | QSpinBox):
         if isinstance(widget, QLineEdit):
@@ -1636,6 +1801,7 @@ class UploadTab(QWidget):
 
     def save_specimen_draft(self):
         self.sync_current_specimen_form_to_table()
+        self.copy_pending_media_for_all_specimen_rows()
         records = self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         self.write_specimen_draft(records, self.collect_specimen_form_values())
         self.write_specimen_current_excel(records)
@@ -1676,6 +1842,7 @@ class UploadTab(QWidget):
 
     def export_specimen_rows_to_excel(self):
         self.sync_current_specimen_form_to_table()
+        self.copy_pending_media_for_all_specimen_rows()
         records = self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         if not records:
             QMessageBox.warning(self, "엑셀 저장", "저장할 행이 없습니다.")
@@ -1776,6 +1943,11 @@ class UploadTab(QWidget):
     def sync_specimen_media_filename_field(self, *_):
         value = self.get_form_value("파일경로", self.specimen_form_widgets)
         self.set_form_value("파일명", Path(value).name if value else "", self.specimen_form_widgets)
+
+    def update_specimen_media_thumbnail(self, *_):
+        self.render_media_thumbnail(
+            self.specimen_media_thumbnail_label, self.get_form_value("파일경로", self.specimen_form_widgets)
+        )
 
     def normalize_specimen_date_field(self, field: str):
         current = self.get_form_value(field, self.specimen_form_widgets)
@@ -2062,20 +2234,28 @@ class UploadTab(QWidget):
         finally:
             self.data_table.blockSignals(was_blocked)
 
+    @staticmethod
+    def default_field_value(column_name: str) -> Any:
+        if column_name == "관찰개체수":
+            return 1
+        if column_name in DROPDOWN_DEFAULTS:
+            return DROPDOWN_DEFAULTS[column_name]
+        if column_name in TEXT_DEFAULTS:
+            return TEXT_DEFAULTS[column_name]
+        if column_name in DROPDOWN_OPTIONS and DROPDOWN_OPTIONS[column_name]:
+            # set_form_value가 콤보에서 ""와 일치하는 항목을 못 찾으면 첫 항목으로
+            # 떨어지는(findText 실패 -> index 0) 기존 동작과 맞춰야 함
+            return DROPDOWN_OPTIONS[column_name][0]
+        return ""
+
     def clear_form(self):
         for column_name in ROW_COLUMNS:
             if column_name in STICKY_FIELDS:
                 continue
             if column_name == "NO.":
                 self.set_form_value(column_name, self.next_no_value())
-            elif column_name == "관찰개체수":
-                self.set_form_value(column_name, 1)
-            elif column_name in DROPDOWN_DEFAULTS:
-                self.set_form_value(column_name, DROPDOWN_DEFAULTS[column_name])
-            elif column_name in TEXT_DEFAULTS:
-                self.set_form_value(column_name, TEXT_DEFAULTS[column_name])
             else:
-                self.set_form_value(column_name, "")
+                self.set_form_value(column_name, self.default_field_value(column_name))
         self.apply_project_to_form()
         self.set_default_organization()
         self.apply_organization_to_form()
@@ -2110,8 +2290,10 @@ class UploadTab(QWidget):
         return True
 
     def prepare_next_input(self, values: dict[str, Any]):
-        self.set_form_value("NO.", self.next_no_value())
-        self.refresh_generated_fields()
+        # NO.만 올리고 나머지(국명/학명/파일경로 등)를 그대로 두면, "입력" 이후 폼에 남아있는
+        # 직전 값이 다음 저장(임시저장/엑셀저장) 때 새 행으로 중복 추가되는 문제가 있었음
+        # -> "새 입력"과 동일하게 폼을 완전히 리셋
+        self.clear_form()
 
     def next_no_value(self) -> int:
         max_no = 0
@@ -2256,6 +2438,8 @@ class UploadTab(QWidget):
                 self.set_form_value("미디어타입", media_type)
                 self.set_form_value("NO.", self.next_no_value())
                 self.set_form_value("파일경로", str(file_path))
+                self.set_form_value("원본경로", str(file_path))
+                self.set_form_value("원본파일명", file_path.name)
                 self.apply_location_from_media(file_path, media_type)
                 self.apply_duration_from_media(file_path, media_type)
                 self.apply_date_from_media(file_path, media_type)
@@ -2291,8 +2475,9 @@ class UploadTab(QWidget):
             return
 
         self.set_form_value("파일경로", file_path)
-        self.set_form_value("원본경로", "")
-        self.set_form_value("원본파일명", "")
+        # 새로 고른 원본 파일 정보를 바로 기록 (저장 시 파일경로/파일명만 새 저장위치로 바뀜)
+        self.set_form_value("원본경로", file_path)
+        self.set_form_value("원본파일명", Path(file_path).name)
         self.apply_location_from_media(Path(file_path), media_type)
         self.apply_duration_from_media(Path(file_path), media_type)
         self.apply_date_from_media(Path(file_path), media_type)
@@ -2431,6 +2616,49 @@ class UploadTab(QWidget):
                 values[filename_field] = saved_path.name
                 self.set_form_value(filename_field, saved_path.name)
         return values
+
+    def apply_media_copy_to_row_values(self, values: dict[str, Any]) -> dict[str, Any]:
+        # prepare_media_for_record와 같은 복사 로직이지만 폼 위젯을 건드리지 않음
+        # (현재 선택된 행이 아닌 다른 행을 일괄 처리할 때 쓰기 위함)
+        media_path_text = normalize_text(values.get("파일경로"))
+        if not media_path_text:
+            return values
+
+        source_path = Path(media_path_text)
+        if not source_path.exists():
+            return values
+
+        saved_path = self.save_media_file_to_storage(source_path, values)
+        if not saved_path:
+            return values
+
+        values = values.copy()
+        if not normalize_text(values.get("원본경로")):
+            values["원본경로"] = str(source_path)
+            values["원본파일명"] = source_path.name
+        values["파일경로"] = str(saved_path)
+        values["파일명"] = saved_path.name
+        latitude, longitude, _ = self.extract_location_from_media(saved_path, values.get("미디어타입", ""))
+        if latitude is not None and longitude is not None:
+            values["위도"] = f"{latitude:.7f}"
+            values["경도"] = f"{longitude:.7f}"
+        filename_field = {"동영상": "동영상 파일명", "사운드": "사운드 파일명"}.get(values.get("미디어타입"))
+        if filename_field:
+            values[filename_field] = saved_path.name
+        return values
+
+    def copy_pending_media_for_all_rows(self):
+        # "입력"/"선택 행 수정"으로 개별 저장한 행만 저장 위치로 복사되고 나머지 행(예:
+        # 미디어 폴더로 한 번에 불러온 뒤 아직 손 안 댄 행)은 원본 경로 그대로 남아있던 문제 ->
+        # 임시저장/엑셀저장 시 모든 행을 훑어서 아직 안 옮겨진 미디어까지 마저 복사
+        for row in range(self.data_table.rowCount()):
+            values = {
+                column: (self.data_table.item(row, col).text() if self.data_table.item(row, col) else "")
+                for col, column in enumerate(ROW_COLUMNS)
+            }
+            updated = self.apply_media_copy_to_row_values(values)
+            if updated is not values:
+                self.write_data_row(row, updated)
 
     def select_media_storage_dir(self):
         selected_dir = QFileDialog.getExistingDirectory(self, "미디어 저장 위치 선택", self.media_storage_dir or "")
@@ -2825,6 +3053,7 @@ class UploadTab(QWidget):
 
     def save_draft(self):
         self.sync_current_form_to_table()
+        self.copy_pending_media_for_all_rows()
         records = self.table_to_records(self.data_table, ROW_COLUMNS)
         self.write_draft(records, self.collect_form_values())
         self.write_current_excel(records)
@@ -2863,6 +3092,7 @@ class UploadTab(QWidget):
 
     def export_rows_to_excel(self):
         self.sync_current_form_to_table()
+        self.copy_pending_media_for_all_rows()
         records = self.table_to_records(self.data_table, ROW_COLUMNS)
         if not records:
             QMessageBox.warning(self, "엑셀 저장", "저장할 행이 없습니다.")
@@ -2938,25 +3168,30 @@ class UploadTab(QWidget):
         self.set_save_status(f"엑셀 불러오기 완료: {file_path} ({len(df)}건)")
 
     def sync_current_form_to_table(self):
+        # 선택된 행이 있을 때만 그 행에 지금 폼 내용을 반영. 새 행 추가는 "입력" 버튼으로만
+        # 하도록 함 - 예전엔 선택 없을 때 폼 내용으로 새 행을 추측해서 만들었는데, 그게
+        # 저장(임시저장/엑셀로 저장) 시 의도치 않은 중복 행이 생기는 원인이었음.
+        row = self.current_data_row()
+        if row is None:
+            return
         values = self.collect_form_values()
         if not self.has_form_content(values):
             return
         values = self.prepare_media_for_record(values)
-
-        row = self.current_data_row()
-        if row is not None:
-            self.write_data_row(row, values)
-            return
-
-        if not self.is_duplicate_record(values):
-            self.add_data_row(values)
+        self.write_data_row(row, values)
 
     def has_form_content(self, values: dict[str, Any]) -> bool:
-        ignored_fields = {"사업명", "사업년도", "순번", "기관명", "기관코드", "미디어코드", "데이터베이스번호"}
+        # 값이 비어있지 않다고 해서 "내용 있음"은 아님 - 세션 유지값(STICKY_FIELDS)이나
+        # 자동생성 값(NO./미디어코드/데이터베이스번호)일 수도 있고, 드롭다운/국가명처럼
+        # 기본값이 채워진 상태(clear_form 직후)일 수도 있음. 이 둘을 놓치면 선택 없이
+        # 저장할 때 빈 폼이 새 행으로 중복 추가되는 버그가 생김(실제로 두 번 발생했던 문제) ->
+        # clear_form()이 실제로 채우는 기본값(default_field_value)과 직접 비교해서 판단.
+        ignored_fields = STICKY_FIELDS | {"NO.", "미디어코드", "데이터베이스번호"}
         for key, value in values.items():
             if key in ignored_fields:
                 continue
-            if value not in ("", 0):
+            normalized = value if value is not None else ""
+            if str(normalized) != str(self.default_field_value(key)):
                 return True
         return False
 
