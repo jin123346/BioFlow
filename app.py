@@ -1,11 +1,11 @@
 import logging
 import sys
-from pathlib import Path
 
 from PySide6.QtWidgets import QApplication #PySide6 앱 실행 객체
+from config.paths import LOG_DIR, ensure_data_seeded
 from ui.main_window import MainWindow #메인 창 클래스
 
-LOG_FILE = Path(__file__).resolve().parent / "logs" / "app.log"
+LOG_FILE = LOG_DIR / "app.log"
 
 
 def install_error_logging():
@@ -26,6 +26,7 @@ def install_error_logging():
 
 def main():
     install_error_logging()
+    ensure_data_seeded()
     app = QApplication(sys.argv)  #GUI 프로그램 시작 준비
 
     #창 생성하고 화면에 보여줌

@@ -49,7 +49,11 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         has_rows = self.upload_tab.data_table.rowCount() > 0
         has_form_content = self.upload_tab.has_form_content(self.upload_tab.collect_form_values())
-        if not has_rows and not has_form_content:
+        has_specimen_rows = self.upload_tab.specimen_data_table.rowCount() > 0
+        has_specimen_form_content = self.upload_tab.has_specimen_form_content(
+            self.upload_tab.collect_specimen_form_values()
+        )
+        if not has_rows and not has_form_content and not has_specimen_rows and not has_specimen_form_content:
             event.accept()
             return
 
@@ -65,4 +69,5 @@ class MainWindow(QMainWindow):
             return
         if reply == QMessageBox.Yes:
             self.upload_tab.autosave_draft()
+            self.upload_tab.autosave_specimen_draft()
         event.accept()

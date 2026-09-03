@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtGui import QColor, QCursor
 
 logger = logging.getLogger("bioflow.upload_tab")
 from PySide6.QtWidgets import (
@@ -31,8 +32,10 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTableWidgetSelectionRange,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -60,7 +63,10 @@ ROW_COLUMNS = [
     "종고유ID",
     "미디어타입",
     "미디어코드",
-    "미디어파일",
+    "원본경로",
+    "원본파일명",
+    "파일경로",
+    "파일명",
     "동영상 제목",
     "동영상 상세설명",
     "동영상 재생시간",
@@ -189,6 +195,14 @@ DROPDOWN_DEFAULTS = {
     "국외반출여부": "미반출",
 }
 
+# 대부분 국내 표본/관찰이라 기본값으로 채워두고, 해외 건이면 직접 고치는 방식
+TEXT_DEFAULTS = {
+    "국가국문명": "대한민국",
+    "국가영문명": "Republic of Korea",
+}
+
+DATE_FIELDS = {"동정년월일", "관찰일", "채집년월일"}
+
 # 사업/기관/미디어타입/분류코드는 여러 행을 연달아 입력할 때 세션 내내 유지되는 값
 STICKY_FIELDS = {"사업명", "사업년도", "순번", "기관명", "기관코드", "미디어타입", "분류코드"}
 
@@ -217,6 +231,163 @@ MEDIA_EXTENSION_TYPES = {
 
 AUTO_FIELDS = {"NO.", "미디어코드", "사업년도", "순번", "기관코드", "데이터베이스번호"}
 DEFAULT_ORGANIZATION_NAME = "국립중앙과학관"
+
+SPECIMEN_DRAFT_FILE = REFERENCE_DIR / "new_specimen_draft.json"
+
+# 표본은 관찰과 달리 미디어타입 구분 없이 이미지 등록만 지원하고,
+# 데이터베이스번호도 미디어코드 없이 "SP" 고정값을 사용 (기관코드-SP-분류코드-연도순번No)
+SPECIMEN_ROW_COLUMNS = [
+    "NO.",
+    "종고유ID",
+    "원본경로",
+    "원본파일명",
+    "파일경로",
+    "파일명",
+    "분류코드",
+    "사업명",
+    "사업년도",
+    "순번",
+    "기관명",
+    "기관코드",
+    "국명",
+    "학명",
+    "과명",
+    "속명",
+    "종명",
+    "이전목록번호 국문명",
+    "이전목록번호 영문명",
+    "데이터베이스번호",
+    "이전데이터베이스번호",
+    "동정자 국문",
+    "동정자 영문",
+    "동정년월일",
+    "성별",
+    "연령",
+    "원본여부",
+    "표본 공개여부",
+    "대륙/해양 국문",
+    "대륙/해양 영문",
+    "위도",
+    "경도",
+    "국가국문명",
+    "국가영문명",
+    "채집위치 시도 국문",
+    "채집위치 시도 영문",
+    "채집위치 시군구 국문",
+    "채집위치 시군구 영문",
+    "채집위치 읍면동 국문",
+    "채집위치 읍면동 영문",
+    "채집위치 상세 국문",
+    "채집위치 상세 영문",
+    "채집자 국문",
+    "채집자 영문",
+    "채집년월일",
+    "채집시간",
+    "표본제작형태",
+    "원산지",
+    "원산지 공개여부",
+    "자원공개여부",
+    "국외반출여부",
+    "분양가능여부",
+    "표본활용현황",
+]
+
+# ponytail: 채집시간/표본제작형태 옵션 목록은 사용자가 준 이미지에서 "오전,오후,..."/
+# "액침,건조,..."로 잘려있어 임시 목록으로 채움. 콤보박스를 editable로 열어뒀으니
+# 실제 운영 목록이 정해지면 여기 리스트만 갱신하면 됨.
+SPECIMEN_DROPDOWN_OPTIONS = {
+    "분류코드": ["IN", "PL", "BI", "PI", "MM"],
+    "성별": ["암컷", "수컷", "양성", "확인불가"],
+    "연령": ["성체", "어린개체", "중간개체", "확인불가"],
+    "원본여부": ["원본", "사본"],
+    "표본 공개여부": ["공개", "비공개"],
+    "대륙/해양 국문": ["아시아", "태평양"],
+    "대륙/해양 영문": ["Asia", "Pacific Ocean"],
+    "채집시간": ["오전", "오후", "새벽", "야간", "확인불가"],
+    "표본제작형태": ["액침", "건조", "박제", "골격", "기타"],
+    "원산지 공개여부": ["공개", "비공개"],
+    "자원공개여부": ["공개", "비공개"],
+    "국외반출여부": ["가능", "미반출"],
+    "분양가능여부": ["가능", "불가능"],
+}
+
+SPECIMEN_DROPDOWN_DEFAULTS = {
+    "성별": "확인불가",
+    "연령": "확인불가",
+    "원본여부": "원본",
+    "표본 공개여부": "공개",
+    "원산지 공개여부": "공개",
+    "자원공개여부": "공개",
+    "국외반출여부": "미반출",
+}
+
+SPECIMEN_STICKY_FIELDS = {"사업명", "사업년도", "순번", "기관명", "기관코드", "분류코드"}
+
+SPECIMEN_ADDRESS_FIELDS = {
+    "채집위치 시도 국문": ("채집위치 시도 영문", "sido"),
+    "채집위치 시군구 국문": ("채집위치 시군구 영문", "sigungu"),
+    "채집위치 읍면동 국문": ("채집위치 읍면동 영문", "eupmyeondong"),
+    "채집위치 상세 국문": ("채집위치 상세 영문", "detail"),
+}
+
+SPECIMEN_AUTO_FIELDS = {"NO.", "사업년도", "순번", "기관코드", "데이터베이스번호"}
+
+# 과명/속명/종명은 국명 조회 시 자동으로 채워지지만, 종정보 마스터에 과명 컬럼이
+# 없어 비워둔 채로 시작함 -> 사용자가 직접 채우거나 자동값을 고치면 노란색으로 표시해서
+# "마스터와 다르게 수동 보정된 값"임을 추후 업데이트 때 구분할 수 있게 함.
+SPECIMEN_TAXON_AUTOFILL_FIELDS = ["과명", "속명", "종명"]
+SPECIMEN_TAXON_EDITED_COLOR = QColor("#fff3b0")
+
+SPECIMEN_FINAL_EXPORT_COLUMNS: list[tuple[str, str | None]] = [
+    ("표본정보순번", None),
+    ("종고유ID", "종고유ID"),
+    ("학명", "학명"),
+    ("과명", "과명"),
+    ("속명", "속명"),
+    ("종명", "종명"),
+    ("기관코드", "기관코드"),
+    ("기관명", "기관명"),
+    ("동정자 국문", "동정자 국문"),
+    ("동정자 영문", "동정자 영문"),
+    ("동정년월일", "동정년월일"),
+    ("대륙해양국문명", "대륙/해양 국문"),
+    ("대륙해양영문명", "대륙/해양 영문"),
+    ("국가 국문명", "국가국문명"),
+    ("국가 영문명", "국가영문명"),
+    ("경도", "경도"),
+    ("위도", "위도"),
+    ("성별", "성별"),
+    ("연령", "연령"),
+    ("이전목록번호국문명", "이전목록번호 국문명"),
+    ("이전목록번호영문명", "이전목록번호 영문명"),
+    ("데이터베이스번호", "데이터베이스번호"),
+    ("이전데이터베이스번호", "이전데이터베이스번호"),
+    ("원본여부", "원본여부"),
+    ("표본정보 공개여부", "표본 공개여부"),
+    ("채집위치 시도 국문", "채집위치 시도 국문"),
+    ("채집위치 시도 영문", "채집위치 시도 영문"),
+    ("채집위치 시군구 국문", "채집위치 시군구 국문"),
+    ("채집위치 시군구 영문", "채집위치 시군구 영문"),
+    ("채집위치읍면동국문명", "채집위치 읍면동 국문"),
+    ("채집위치읍면동영문명", "채집위치 읍면동 영문"),
+    ("채집위치 상세 국문", "채집위치 상세 국문"),
+    ("채집위치 상세 영문", "채집위치 상세 영문"),
+    ("채집자 국문", "채집자 국문"),
+    ("채집자 영문", "채집자 영문"),
+    ("채집년월일", "채집년월일"),
+    ("채집시간", "채집시간"),
+    ("사업년도", "사업년도"),
+    ("순번", "순번"),
+    ("사업명", "사업명"),
+    ("원산지", "원산지"),
+    ("원산지 공개여부", "원산지 공개여부"),
+    ("자원공개여부", "자원공개여부"),
+    ("국외반출여부", "국외반출여부"),
+    ("분양가능여부", "분양가능여부"),
+    ("표본제작형태", "표본제작형태"),
+    ("표본활용현황", "표본활용현황"),
+    ("관리번호", None),
+]
 
 DEFAULT_PROJECTS = [
     {"사업년도": 2025, "순번": 1, "사업명": "국가생물다양성기관연합공동학술조사"},
@@ -300,18 +471,116 @@ DEFAULT_ORGANIZATIONS = [
 ]
 
 
+FILL_HANDLE_SIZE = 6
+
+
 class DataTableWidget(QTableWidget):
-    """Ctrl+V로 엑셀에서 복사한 여러 셀을 한 번에 붙여넣을 수 있는 표."""
+    """Ctrl+V로 엑셀에서 복사한 여러 셀을 한 번에 붙여넣거나, 선택 영역 우측 하단
+    모서리를 드래그해서 값을 위/아래로 복사(엑셀 채우기 핸들과 비슷하되 단순 복사만 지원)."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.paste_requested = None
+        self._fill_dragging = False
+        self._fill_source_rows: list[int] = []
+        self._fill_columns: list[int] = []
+        self._fill_target_row: int | None = None
 
     def keyPressEvent(self, event):
         if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_V and self.paste_requested:
             self.paste_requested()
             return
         super().keyPressEvent(event)
+
+    def _fill_handle_rect(self) -> QRect | None:
+        selected = self.selectedIndexes()
+        if not selected:
+            return None
+        bottom_right = max(selected, key=lambda idx: (idx.row(), idx.column()))
+        cell_rect = self.visualRect(bottom_right)
+        return QRect(
+            cell_rect.right() - FILL_HANDLE_SIZE,
+            cell_rect.bottom() - FILL_HANDLE_SIZE,
+            FILL_HANDLE_SIZE * 2,
+            FILL_HANDLE_SIZE * 2,
+        )
+
+    def mousePressEvent(self, event):
+        handle_rect = self._fill_handle_rect()
+        if handle_rect and handle_rect.contains(event.position().toPoint()):
+            selected = self.selectedIndexes()
+            self._fill_source_rows = sorted({idx.row() for idx in selected})
+            self._fill_columns = sorted({idx.column() for idx in selected})
+            self._fill_target_row = self._fill_source_rows[-1] if self._fill_source_rows else None
+            self._fill_dragging = bool(self._fill_source_rows)
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._fill_dragging:
+            row = self.rowAt(event.position().toPoint().y())
+            if row == -1:
+                row = self.rowCount() - 1
+            if row != self._fill_target_row:
+                self._fill_target_row = row
+                self._preview_fill_range(row)
+            return
+
+        handle_rect = self._fill_handle_rect()
+        is_over_handle = bool(handle_rect and handle_rect.contains(event.position().toPoint()))
+        self.viewport().setCursor(QCursor(Qt.CrossCursor) if is_over_handle else QCursor(Qt.ArrowCursor))
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._fill_dragging:
+            self._commit_fill()
+            self._fill_dragging = False
+            self._fill_source_rows = []
+            self._fill_columns = []
+            self._fill_target_row = None
+            return
+        super().mouseReleaseEvent(event)
+
+    def _preview_fill_range(self, target_row: int):
+        if not self._fill_source_rows or not self._fill_columns:
+            return
+        top = min(self._fill_source_rows[0], target_row)
+        bottom = max(self._fill_source_rows[-1], target_row)
+        # 드래그 중 미리보기는 선택영역만 넓혀서 보여줌(값은 놓을 때 한번에 적용) ->
+        # itemSelectionChanged를 계속 쏟아내며 폼을 흔들지 않도록 신호는 막아둠
+        was_blocked = self.blockSignals(True)
+        try:
+            self.clearSelection()
+            self.setRangeSelected(
+                QTableWidgetSelectionRange(top, self._fill_columns[0], bottom, self._fill_columns[-1]), True
+            )
+        finally:
+            self.blockSignals(was_blocked)
+
+    def _commit_fill(self):
+        if self._fill_target_row is None or not self._fill_source_rows or not self._fill_columns:
+            return
+        source_min, source_max = self._fill_source_rows[0], self._fill_source_rows[-1]
+        target_row = self._fill_target_row
+        if target_row > source_max:
+            fill_rows = range(source_max + 1, target_row + 1)
+        elif target_row < source_min:
+            fill_rows = range(target_row, source_min)
+        else:
+            return
+
+        # 값 쓰기는 신호를 막지 않음 -> 국명 자동조회/날짜 형식변환 등 기존 셀 편집 로직이
+        # itemChanged를 통해 채워진 행에도 그대로 적용됨
+        for offset, row in enumerate(fill_rows):
+            source_row = self._fill_source_rows[offset % len(self._fill_source_rows)]
+            for col in self._fill_columns:
+                source_item = self.item(source_row, col)
+                text = source_item.text() if source_item else ""
+                target_item = self.item(row, col)
+                if target_item is None:
+                    self.setItem(row, col, QTableWidgetItem(text))
+                elif target_item.text() != text:
+                    target_item.setText(text)
 
 
 class UploadTab(QWidget):
@@ -322,23 +591,33 @@ class UploadTab(QWidget):
         self.project_lookup: dict[str, dict[str, Any]] = {}
         self.organization_lookup: dict[str, dict[str, Any]] = {}
         self.form_widgets: dict[str, QLineEdit | QComboBox | QSpinBox] = {}
+        self.specimen_form_widgets: dict[str, QLineEdit | QComboBox | QSpinBox] = {}
         self.species_master_df = pd.DataFrame()
         self.species_name_lookup: dict[str, list[dict[str, Any]]] = {}
         self.master_service = SpeciesMasterService()
         self.address_master = AddressMasterService()
         self._last_selected_row: int | None = None
+        self._specimen_last_selected_row: int | None = None
+        self._specimen_taxon_edited_fields: set[str] = set()
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setSingleShot(True)
         self.autosave_timer.timeout.connect(self.autosave_draft)
         self.autosave_suspended = False
+        self.specimen_autosave_timer = QTimer(self)
+        self.specimen_autosave_timer.setSingleShot(True)
+        self.specimen_autosave_timer.timeout.connect(self.autosave_specimen_draft)
+        self.specimen_autosave_suspended = False
         self.excel_file_path = ""
         self.media_storage_dir = ""
+        self.specimen_excel_file_path = ""
+        self.specimen_media_storage_dir = ""
 
         self._ensure_reference_files()
         self.load_reference_data()
         self.load_species_master_lookup()
         self.init_ui()
         self.load_draft()
+        self.load_specimen_draft()
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -350,7 +629,8 @@ class UploadTab(QWidget):
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        self.tabs.addTab(self._build_row_editor_tab(), "행 작성")
+        self.tabs.addTab(self._build_row_editor_tab(), "관찰 정보작성")
+        self.tabs.addTab(self._build_specimen_editor_tab(), "표본정보 작성")
         self.tabs.addTab(self._build_project_tab(), "사업 관리")
         self.tabs.addTab(self._build_organization_tab(), "기관 관리")
 
@@ -402,7 +682,6 @@ class UploadTab(QWidget):
         self.row_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         self.build_row_form()
         scroll_area.setWidget(form_container)
-        layout.addWidget(scroll_area, 2)
 
         next_row_layout = QHBoxLayout()
         next_row_layout.addStretch()
@@ -412,12 +691,24 @@ class UploadTab(QWidget):
         next_row_button.clicked.connect(self.go_to_next_row)
         next_row_layout.addWidget(add_row_button)
         next_row_layout.addWidget(next_row_button)
-        layout.addLayout(next_row_layout)
+
+        # 입력창(위)/표(아래) 경계를 사용자가 드래그해서 조절할 수 있게 QSplitter로 묶음
+        # (기존엔 2:3 고정 비율이라 입력창을 더 길게 볼 수 없었음)
+        top_pane = QWidget()
+        top_pane_layout = QVBoxLayout(top_pane)
+        top_pane_layout.setContentsMargins(0, 0, 0, 0)
+        top_pane_layout.addWidget(scroll_area, 1)
+        top_pane_layout.addLayout(next_row_layout)
 
         self.data_table = DataTableWidget(0, len(ROW_COLUMNS))
         self.data_table.setHorizontalHeaderLabels(ROW_COLUMNS)
         self.data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.data_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.data_table.setEditTriggers(
+            QAbstractItemView.DoubleClicked
+            | QAbstractItemView.EditKeyPressed
+            | QAbstractItemView.AnyKeyPressed
+            | QAbstractItemView.SelectedClicked
+        )
         self.data_table.itemSelectionChanged.connect(self.load_selected_row_to_form)
         self.data_table.itemChanged.connect(self.on_data_table_item_changed)
         self.data_table.paste_requested = self.paste_clipboard_into_table
@@ -426,7 +717,13 @@ class UploadTab(QWidget):
         # Interactive로 바꾸고 최초 1회만 폭을 맞춤 (이후 사용자가 드래그로 조절 가능).
         self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.data_table.resizeColumnsToContents()
-        layout.addWidget(self.data_table, 3)
+
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(top_pane)
+        splitter.addWidget(self.data_table)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        layout.addWidget(splitter, 1)
 
         save_layout = QHBoxLayout()
         save_draft_button = QPushButton("작성 내용 저장")
@@ -487,16 +784,21 @@ class UploadTab(QWidget):
                     widget.currentTextChanged.connect(self.update_media_type_field_visibility)
             else:
                 widget = QLineEdit()
-                if column_name in {"동정년월일", "관찰일"}:
-                    widget.setPlaceholderText("2016-01-01")
+                if column_name in DATE_FIELDS:
+                    widget.setPlaceholderText("2016-01-01 (260508, 20260508도 자동 변환)")
+                    widget.editingFinished.connect(lambda field=column_name: self.normalize_date_field(field))
                 elif column_name == "위도":
                     widget.setPlaceholderText("36.123456")
                 elif column_name == "경도":
                     widget.setPlaceholderText("126.123456")
                 elif column_name == "종고유ID":
                     widget.setPlaceholderText("종정보 마스터의 종고유ID")
-                elif column_name == "미디어파일":
-                    widget.setPlaceholderText("원본 미디어 선택 버튼으로 선택")
+                elif column_name in {"원본경로", "원본파일명", "파일경로", "파일명"}:
+                    widget.setReadOnly(True)
+                    if column_name == "파일경로":
+                        widget.setPlaceholderText("원본 미디어 선택 버튼으로 선택")
+                    elif column_name == "원본경로":
+                        widget.setPlaceholderText("저장 전 원본 파일 경로(자동 기록, 이후 저장해도 유지)")
                 elif column_name in {"동영상 재생시간", "사운드 재생시간"}:
                     widget.setPlaceholderText("예: 0:45")
                 elif column_name in {"동영상 파일명", "사운드 파일명"}:
@@ -520,6 +822,8 @@ class UploadTab(QWidget):
                     widget.editingFinished.connect(
                         lambda field=column_name: self.fill_address_english(field)
                     )
+            if column_name in TEXT_DEFAULTS and isinstance(widget, QLineEdit):
+                widget.setText(TEXT_DEFAULTS[column_name])
             if column_name in AUTO_FIELDS:
                 widget.setEnabled(False)
                 if isinstance(widget, QLineEdit):
@@ -528,7 +832,10 @@ class UploadTab(QWidget):
                     widget.setButtonSymbols(QSpinBox.NoButtons)
             self.form_widgets[column_name] = widget
             self.connect_autosave_signal(widget)
-            if column_name == "미디어파일":
+            if column_name == "파일경로":
+                # "파일명"은 별도 컬럼(read-only)이지만 "파일경로"가 바뀔 때마다
+                # 자동으로 따라가도록 여기서 연결(sync_media_filename_field)
+                widget.textChanged.connect(self.sync_media_filename_field)
                 media_layout = QHBoxLayout()
                 media_layout.addWidget(widget, 1)
                 select_media_button = QPushButton("원본 선택")
@@ -538,6 +845,26 @@ class UploadTab(QWidget):
             else:
                 self.row_form.addRow(label, widget)
         self.update_media_type_field_visibility()
+
+    def sync_media_filename_field(self, *_):
+        value = self.get_form_value("파일경로")
+        self.set_form_value("파일명", Path(value).name if value else "")
+
+    @staticmethod
+    def normalize_date_text(text: str) -> str:
+        # 순수 숫자 6자리(YYMMDD)/8자리(YYYYMMDD)만 변환. 이미 구분자가 있는 값은
+        # (형식이 맞든 틀리든) 잘못 재해석하지 않도록 그대로 둠.
+        digits = text.strip()
+        if not digits.isdigit():
+            return text
+        if len(digits) == 6:
+            return f"20{digits[0:2]}-{digits[2:4]}-{digits[4:6]}"
+        if len(digits) == 8:
+            return f"{digits[0:4]}-{digits[4:6]}-{digits[6:8]}"
+        return text
+
+    def normalize_date_field(self, field: str):
+        self.set_form_value(field, self.normalize_date_text(self.get_form_value(field)))
 
     def update_media_type_field_visibility(self, *_):
         media_type = self.get_form_value("미디어타입")
@@ -551,6 +878,916 @@ class UploadTab(QWidget):
         if widget is None:
             return
         self.row_form.setRowVisible(widget, visible)
+
+    # ------------------------------------------------------------------
+    # 표본정보 작성 (관찰 정보작성과 같은 구조를 재사용: 사업/기관 참조데이터, 종정보 마스터,
+    # 주소 마스터, EXIF/ffprobe 미디어 추출 등은 self.<staticmethod>로 그대로 재사용하고,
+    # 폼/표 상태만 별도(specimen_ 접두사)로 둠. ponytail: 관찰 쪽 CRUD와 구조가 거의
+    # 동일해 다소 중복이지만, 컬럼/DB번호 규칙/이미지 단일등록 등 차이가 커 공통 베이스로
+    # 추출하려면 관찰 코드 전체를 건드려야 해서 보류함 -> 다음에 손댈 일 있으면 공통 베이스
+    # 클래스로 뽑아내는 걸 고려.
+    # ------------------------------------------------------------------
+
+    def _build_specimen_editor_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        control_layout = QHBoxLayout()
+
+        new_form_button = QPushButton("새 입력")
+        new_form_button.clicked.connect(self.clear_specimen_form)
+        update_row_button = QPushButton("선택 행 수정")
+        update_row_button.clicked.connect(self.update_selected_specimen_data_row)
+        delete_row_button = QPushButton("선택 행 삭제")
+        delete_row_button.clicked.connect(self.delete_selected_specimen_data_rows)
+        lookup_species_button = QPushButton("국명 조회")
+        lookup_species_button.clicked.connect(self.fill_specimen_taxon_from_korean_name)
+        lookup_address_button = QPushButton("위도/경도로 주소 조회")
+        lookup_address_button.clicked.connect(self.fill_specimen_address_from_latlon)
+        self.specimen_species_status_label = QLabel("")
+
+        control_layout.addWidget(new_form_button)
+        control_layout.addWidget(update_row_button)
+        control_layout.addWidget(delete_row_button)
+        control_layout.addWidget(lookup_species_button)
+        control_layout.addWidget(lookup_address_button)
+        control_layout.addWidget(self.specimen_species_status_label)
+        control_layout.addStretch()
+        layout.addLayout(control_layout)
+
+        media_storage_layout = QHBoxLayout()
+        self.specimen_media_storage_path_input = QLineEdit()
+        self.specimen_media_storage_path_input.setReadOnly(True)
+        self.specimen_media_storage_path_input.setPlaceholderText("표본 이미지를 DB번호 이름으로 저장할 폴더")
+        media_storage_button = QPushButton("이미지 저장 위치 선택")
+        media_storage_button.clicked.connect(self.select_specimen_media_storage_dir)
+        media_storage_layout.addWidget(QLabel("이미지 저장 위치"))
+        media_storage_layout.addWidget(self.specimen_media_storage_path_input, 1)
+        media_storage_layout.addWidget(media_storage_button)
+        layout.addLayout(media_storage_layout)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        form_container = QWidget()
+        self.specimen_row_form = QFormLayout(form_container)
+        self.specimen_row_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self.build_specimen_row_form()
+        scroll_area.setWidget(form_container)
+
+        next_row_layout = QHBoxLayout()
+        next_row_layout.addStretch()
+        add_row_button = QPushButton("입력")
+        add_row_button.clicked.connect(self.add_specimen_data_row_from_form)
+        next_row_button = QPushButton("다음 행")
+        next_row_button.clicked.connect(self.go_to_next_specimen_row)
+        next_row_layout.addWidget(add_row_button)
+        next_row_layout.addWidget(next_row_button)
+
+        top_pane = QWidget()
+        top_pane_layout = QVBoxLayout(top_pane)
+        top_pane_layout.setContentsMargins(0, 0, 0, 0)
+        top_pane_layout.addWidget(scroll_area, 1)
+        top_pane_layout.addLayout(next_row_layout)
+
+        self.specimen_data_table = DataTableWidget(0, len(SPECIMEN_ROW_COLUMNS))
+        self.specimen_data_table.setHorizontalHeaderLabels(SPECIMEN_ROW_COLUMNS)
+        self.specimen_data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.specimen_data_table.setEditTriggers(
+            QAbstractItemView.DoubleClicked
+            | QAbstractItemView.EditKeyPressed
+            | QAbstractItemView.AnyKeyPressed
+            | QAbstractItemView.SelectedClicked
+        )
+        self.specimen_data_table.itemSelectionChanged.connect(self.load_selected_specimen_row_to_form)
+        self.specimen_data_table.itemChanged.connect(self.on_specimen_data_table_item_changed)
+        self.specimen_data_table.paste_requested = self.paste_clipboard_into_specimen_table
+        self.specimen_data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.specimen_data_table.resizeColumnsToContents()
+
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(top_pane)
+        splitter.addWidget(self.specimen_data_table)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        layout.addWidget(splitter, 1)
+
+        save_layout = QHBoxLayout()
+        save_draft_button = QPushButton("작성 내용 저장")
+        save_draft_button.clicked.connect(self.save_specimen_draft)
+        load_draft_button = QPushButton("임시저장 불러오기")
+        load_draft_button.clicked.connect(self.reload_specimen_draft)
+        export_button = QPushButton("엑셀로 저장")
+        export_button.clicked.connect(self.export_specimen_rows_to_excel)
+        import_button = QPushButton("엑셀 불러오기")
+        import_button.clicked.connect(self.load_specimen_rows_from_excel)
+        clear_button = QPushButton("작성 내용 비우기")
+        clear_button.clicked.connect(self.clear_specimen_data_rows)
+        self.specimen_save_status_label = QLabel("")
+
+        save_layout.addStretch()
+        save_layout.addWidget(save_draft_button)
+        save_layout.addWidget(load_draft_button)
+        save_layout.addWidget(export_button)
+        save_layout.addWidget(import_button)
+        save_layout.addWidget(clear_button)
+        save_layout.addWidget(self.specimen_save_status_label)
+        layout.addLayout(save_layout)
+        self.refresh_combos()
+        return tab
+
+    def build_specimen_row_form(self):
+        for column_name in SPECIMEN_ROW_COLUMNS:
+            label = QLabel(column_name)
+            if column_name in {"사업명", "기관명"}:
+                widget = QComboBox()
+                widget.currentTextChanged.connect(self.refresh_specimen_generated_fields)
+                if column_name == "사업명":
+                    widget.currentTextChanged.connect(self.apply_specimen_project_to_form)
+                else:
+                    widget.currentTextChanged.connect(self.apply_specimen_organization_to_form)
+            elif column_name in {"사업년도", "NO."}:
+                widget = QSpinBox()
+                widget.setRange(2000, 2100) if column_name == "사업년도" else widget.setRange(0, 99999)
+                widget.setValue(datetime.now().year if column_name == "사업년도" else 1)
+                widget.valueChanged.connect(self.refresh_specimen_generated_fields)
+            elif column_name in SPECIMEN_DROPDOWN_OPTIONS:
+                widget = QComboBox()
+                widget.addItems(SPECIMEN_DROPDOWN_OPTIONS[column_name])
+                if column_name in SPECIMEN_DROPDOWN_DEFAULTS:
+                    widget.setCurrentText(SPECIMEN_DROPDOWN_DEFAULTS[column_name])
+                if column_name in {"대륙/해양 국문", "대륙/해양 영문", "채집시간", "표본제작형태"}:
+                    widget.setEditable(True)
+                widget.currentTextChanged.connect(self.refresh_specimen_generated_fields)
+            else:
+                widget = QLineEdit()
+                if column_name in DATE_FIELDS:
+                    widget.setPlaceholderText("2016-01-01 (260508, 20260508도 자동 변환)")
+                    widget.editingFinished.connect(lambda field=column_name: self.normalize_specimen_date_field(field))
+                elif column_name == "위도":
+                    widget.setPlaceholderText("36.123456")
+                elif column_name == "경도":
+                    widget.setPlaceholderText("126.123456")
+                elif column_name == "종고유ID":
+                    widget.setPlaceholderText("종정보 마스터의 종고유ID")
+                elif column_name in {"원본경로", "원본파일명", "파일경로", "파일명"}:
+                    widget.setReadOnly(True)
+                    if column_name == "파일경로":
+                        widget.setPlaceholderText("원본 이미지 선택 버튼으로 선택")
+                    elif column_name == "원본경로":
+                        widget.setPlaceholderText("저장 전 원본 파일 경로(자동 기록, 이후 저장해도 유지)")
+                elif column_name == "국명":
+                    widget.setPlaceholderText("입력 후 Enter 또는 국명 조회")
+                    widget.editingFinished.connect(self.fill_specimen_taxon_from_korean_name)
+                elif column_name in SPECIMEN_TAXON_AUTOFILL_FIELDS:
+                    widget.setPlaceholderText("국명 조회 시 자동 입력 (직접 수정 시 노란색 표시)")
+                    widget.textEdited.connect(lambda _text, field=column_name: self.mark_specimen_taxon_edited(field))
+                elif column_name in SPECIMEN_ADDRESS_FIELDS:
+                    if column_name == "채집위치 상세 국문":
+                        widget.setPlaceholderText("직접 입력 (자동완성 후보 제공, 영문 자동 매칭)")
+                        completer = QCompleter(sorted(self.address_master.candidates("detail")), widget)
+                        completer.setCaseSensitivity(Qt.CaseInsensitive)
+                        completer.setModelSorting(QCompleter.CaseInsensitivelySortedModel)
+                        completer.setFilterMode(Qt.MatchStartsWith)
+                        widget.setCompleter(completer)
+                    else:
+                        widget.setPlaceholderText("국문 입력 후 Enter (영문 자동 매칭)")
+                    widget.editingFinished.connect(
+                        lambda field=column_name: self.fill_specimen_address_english(field)
+                    )
+            if column_name in TEXT_DEFAULTS and isinstance(widget, QLineEdit):
+                widget.setText(TEXT_DEFAULTS[column_name])
+            if column_name in SPECIMEN_AUTO_FIELDS:
+                widget.setEnabled(False)
+                if isinstance(widget, QLineEdit):
+                    widget.setReadOnly(True)
+                if isinstance(widget, QSpinBox):
+                    widget.setButtonSymbols(QSpinBox.NoButtons)
+            self.specimen_form_widgets[column_name] = widget
+            self.connect_specimen_autosave_signal(widget)
+            if column_name == "파일경로":
+                widget.textChanged.connect(self.sync_specimen_media_filename_field)
+                media_layout = QHBoxLayout()
+                media_layout.addWidget(widget, 1)
+                select_media_button = QPushButton("원본 선택")
+                select_media_button.clicked.connect(self.select_specimen_image_source_file)
+                media_layout.addWidget(select_media_button)
+                self.specimen_row_form.addRow(label, media_layout)
+            else:
+                self.specimen_row_form.addRow(label, widget)
+
+    def apply_specimen_project_to_form(self, label: str = ""):
+        self.apply_project_to_form(label, self.specimen_form_widgets, self.refresh_specimen_generated_fields)
+
+    def apply_specimen_organization_to_form(self, label: str = ""):
+        self.apply_organization_to_form(label, self.specimen_form_widgets, self.refresh_specimen_generated_fields)
+
+    def refresh_specimen_generated_fields(self):
+        organization_code = self.get_form_value("기관코드", self.specimen_form_widgets)
+        taxon_code = self.get_form_value("분류코드", self.specimen_form_widgets)
+        year = self.get_form_value("사업년도", self.specimen_form_widgets)
+        order = self.get_form_value("순번", self.specimen_form_widgets)
+        no = self.get_form_value("NO.", self.specimen_form_widgets)
+        if organization_code and taxon_code and year and order and no:
+            year_text = str(year)[-2:].zfill(2)
+            self.set_form_value(
+                "데이터베이스번호",
+                f"{organization_code}-SP-{taxon_code}-{year_text}{int(order):02d}{int(no):05d}",
+                self.specimen_form_widgets,
+            )
+        else:
+            self.set_form_value("데이터베이스번호", "", self.specimen_form_widgets)
+
+    def mark_specimen_taxon_edited(self, field: str):
+        self._specimen_taxon_edited_fields.add(field)
+        widget = self.specimen_form_widgets.get(field)
+        if isinstance(widget, QLineEdit):
+            widget.setStyleSheet(f"background-color: {SPECIMEN_TAXON_EDITED_COLOR.name()};")
+
+    def reset_specimen_taxon_edit_tracking(self):
+        self._specimen_taxon_edited_fields = set()
+        for field in SPECIMEN_TAXON_AUTOFILL_FIELDS:
+            widget = self.specimen_form_widgets.get(field)
+            if isinstance(widget, QLineEdit):
+                widget.setStyleSheet("")
+
+    def fill_specimen_taxon_from_korean_name(self):
+        korean_name = normalize_text(self.get_form_value("국명", self.specimen_form_widgets))
+        if not korean_name:
+            self.set_specimen_species_status("")
+            return
+
+        if not self.species_name_lookup:
+            self.set_specimen_species_status("종정보 마스터 없음")
+            return
+
+        matches = self.species_name_lookup.get(korean_name, [])
+        if not matches:
+            self.set_specimen_species_status("마스터 매칭 없음")
+            return
+
+        match = matches[0]
+        scientific_name = normalize_text(match.get("학명"))
+        species_id = self.clean_master_value(match.get("종고유ID"))
+        if species_id in {"", "0"}:
+            species_id = self.clean_master_value(match.get("종학명정보ID"))
+        genus_name = normalize_text(match.get("속명국문명"))
+        species_epithet = normalize_text(match.get("종소명국문명"))
+
+        self.set_form_value("학명", scientific_name, self.specimen_form_widgets)
+        self.set_form_value("종고유ID", species_id, self.specimen_form_widgets)
+        # 과명은 종정보 마스터에 컬럼이 없어 자동으로 채우지 못함 -> 그대로 두고 직접 입력받음
+        # (직접 입력 즉시 mark_specimen_taxon_edited로 노란색 표시됨)
+        for field, value in (("속명", genus_name), ("종명", species_epithet)):
+            self._specimen_taxon_edited_fields.discard(field)
+            widget = self.specimen_form_widgets.get(field)
+            if isinstance(widget, QLineEdit):
+                widget.setStyleSheet("")
+            self.set_form_value(field, value, self.specimen_form_widgets)
+
+        if len(matches) > 1:
+            self.set_specimen_species_status(f"중복 {len(matches)}건, 첫 항목 적용")
+        else:
+            self.set_specimen_species_status("마스터 적용 완료")
+
+    def fill_specimen_address_english(self, korean_field: str):
+        english_field, level = SPECIMEN_ADDRESS_FIELDS[korean_field]
+        korean_text = normalize_text(self.get_form_value(korean_field, self.specimen_form_widgets))
+        if not korean_text:
+            return
+
+        english_text, exact = self.address_master.match_english(level, korean_text)
+        if not english_text:
+            self.set_specimen_save_status(f"{korean_field}: 주소 마스터에 없음 (직접 입력 필요)")
+            return
+
+        self.set_form_value(english_field, english_text, self.specimen_form_widgets)
+        if exact:
+            self.set_specimen_save_status(f"{korean_field} → {english_text} 자동 적용")
+        else:
+            self.set_specimen_save_status(f"{korean_field} → {english_text} (유사 매칭, 확인 필요)")
+
+    def fill_specimen_address_from_latlon(self):
+        latitude = self.to_float(self.get_form_value("위도", self.specimen_form_widgets))
+        longitude = self.to_float(self.get_form_value("경도", self.specimen_form_widgets))
+        if latitude is None or longitude is None:
+            QMessageBox.warning(self, "주소 조회", "위도/경도를 먼저 입력해 주세요.")
+            return
+
+        try:
+            address_ko = self.reverse_geocode(latitude, longitude, "ko")
+            address_en = self.reverse_geocode(latitude, longitude, "en")
+        except Exception as exc:
+            self.set_specimen_save_status(f"주소 조회 실패: {exc}")
+            return
+
+        if not address_ko:
+            self.set_specimen_save_status("주소 조회 결과가 없습니다.")
+            return
+
+        for korean_field, english_field, key in (
+            ("채집위치 시도 국문", "채집위치 시도 영문", "sido"),
+            ("채집위치 시군구 국문", "채집위치 시군구 영문", "sigungu"),
+            ("채집위치 읍면동 국문", "채집위치 읍면동 영문", "eupmyeondong"),
+        ):
+            korean_value = address_ko.get(key, "")
+            if not korean_value:
+                continue
+            self.set_form_value(korean_field, korean_value, self.specimen_form_widgets)
+
+            english_value = address_en.get(key, "")
+            if english_value and english_value != korean_value:
+                self.set_form_value(english_field, english_value, self.specimen_form_widgets)
+            else:
+                self.fill_specimen_address_english(korean_field)
+
+        self.set_specimen_save_status("위도/경도 기반 주소를 조회했습니다. (OpenStreetMap Nominatim, 내용 확인 필요)")
+
+    def select_specimen_image_source_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "원본 이미지 선택", "", self.media_file_filter("이미지"))
+        if not file_path:
+            return
+
+        self.set_form_value("파일경로", file_path, self.specimen_form_widgets)
+        # 새 원본 파일을 다시 고른 것이므로, 이전 행에 기록돼 있던 원본 정보는 비워서
+        # 다음 저장 때 이번에 고른 파일로 새로 기록되게 함
+        self.set_form_value("원본경로", "", self.specimen_form_widgets)
+        self.set_form_value("원본파일명", "", self.specimen_form_widgets)
+        self.apply_location_from_specimen_media(Path(file_path))
+        self.apply_date_from_specimen_media(Path(file_path))
+        self.schedule_specimen_autosave()
+
+    def apply_location_from_specimen_media(self, source_path: Path):
+        latitude, longitude, message = self.extract_location_from_media(source_path, "이미지")
+        if latitude is None or longitude is None:
+            self.set_specimen_save_status(message)
+            return
+
+        self.set_form_value("위도", f"{latitude:.7f}", self.specimen_form_widgets)
+        self.set_form_value("경도", f"{longitude:.7f}", self.specimen_form_widgets)
+        self.set_specimen_save_status(f"이미지 위치정보 적용: 위도 {latitude:.7f}, 경도 {longitude:.7f}")
+
+    def apply_date_from_specimen_media(self, source_path: Path):
+        date_text = self.extract_media_date(source_path, "이미지")
+        if date_text:
+            self.set_form_value("채집년월일", date_text, self.specimen_form_widgets)
+
+    def prepare_image_for_specimen_record(self, values: dict[str, Any]) -> dict[str, Any]:
+        media_path_text = normalize_text(values.get("파일경로"))
+        if not media_path_text:
+            return values
+
+        source_path = Path(media_path_text)
+        if not source_path.exists():
+            return values
+
+        saved_path = self.save_specimen_media_file_to_storage(source_path, values)
+        if saved_path:
+            values = values.copy()
+            if not normalize_text(values.get("원본경로")):
+                # 최초 저장 시 1번만 기록 -> 재저장해도 진짜 원본 경로가 덮어써지지 않음
+                values["원본경로"] = str(source_path)
+                values["원본파일명"] = source_path.name
+                self.set_form_value("원본경로", str(source_path), self.specimen_form_widgets)
+                self.set_form_value("원본파일명", source_path.name, self.specimen_form_widgets)
+            values["파일경로"] = str(saved_path)
+            values["파일명"] = saved_path.name
+            self.set_form_value("파일경로", str(saved_path), self.specimen_form_widgets)
+            self.apply_location_from_specimen_media(saved_path)
+            values["위도"] = self.get_form_value("위도", self.specimen_form_widgets)
+            values["경도"] = self.get_form_value("경도", self.specimen_form_widgets)
+        return values
+
+    def select_specimen_media_storage_dir(self):
+        selected_dir = QFileDialog.getExistingDirectory(
+            self, "이미지 저장 위치 선택", self.specimen_media_storage_dir or ""
+        )
+        if not selected_dir:
+            return
+        self.specimen_media_storage_dir = selected_dir
+        self.specimen_media_storage_path_input.setText(selected_dir)
+        self.autosave_specimen_draft()
+
+    def ensure_specimen_media_storage_dir(self) -> Path | None:
+        if self.specimen_media_storage_dir:
+            return Path(self.specimen_media_storage_dir)
+
+        selected_dir = QFileDialog.getExistingDirectory(self, "이미지 저장 위치 선택", "")
+        if not selected_dir:
+            return None
+        self.specimen_media_storage_dir = selected_dir
+        self.specimen_media_storage_path_input.setText(selected_dir)
+        return Path(selected_dir)
+
+    def save_specimen_media_file_to_storage(self, source_path: Path, values: dict[str, Any] | None = None) -> Path | None:
+        values = values or self.collect_specimen_form_values()
+        db_number = normalize_text(values.get("데이터베이스번호"))
+        if not db_number:
+            QMessageBox.warning(self, "이미지 저장", "DB번호를 먼저 만들 수 있도록 분류코드, 사업, 기관 값이 필요합니다.")
+            return None
+
+        target_dir = self.ensure_specimen_media_storage_dir()
+        if target_dir is None:
+            self.set_specimen_save_status("이미지 저장 위치 선택이 취소되었습니다.")
+            return None
+
+        expected_stem = self.safe_filename(db_number)
+        same_folder = source_path.parent.resolve() == target_dir.resolve()
+        if same_folder and source_path.stem == expected_stem:
+            # 이미 이 폴더에 DB번호 이름으로 저장돼 있는 파일 -> 복사할 필요 없음
+            return source_path
+        if same_folder:
+            QMessageBox.warning(
+                self,
+                "이미지 저장",
+                "이미지 저장 위치가 원본 파일이 있는 폴더와 같습니다. "
+                "같은 폴더로 복사하면 원본과 뒤섞이니, 원본과 다른 폴더를 저장 위치로 선택해 주세요.",
+            )
+            self.set_specimen_save_status("이미지 저장 실패: 저장 위치가 원본 폴더와 동일합니다.")
+            return None
+
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_path = self.unique_media_path(target_dir, expected_stem, source_path.suffix.lower())
+            shutil.copy2(source_path, target_path)
+            self.set_specimen_save_status(f"이미지 저장 완료: {target_path}")
+            return target_path
+        except Exception as exc:
+            QMessageBox.critical(self, "이미지 저장 실패", str(exc))
+            self.set_specimen_save_status(f"이미지 저장 실패: {exc}")
+            return None
+
+    def add_specimen_data_row_from_form(self):
+        self.set_form_value("NO.", self.next_specimen_no_value(), self.specimen_form_widgets)
+        values = self.collect_specimen_form_values()
+        if not self.validate_specimen_form_values(values):
+            return
+        values = self.prepare_image_for_specimen_record(values)
+        self.add_specimen_data_row(values)
+        self.prepare_next_specimen_input(values)
+        self.autosave_specimen_draft()
+
+    def update_selected_specimen_data_row(self):
+        row = self.current_specimen_data_row()
+        if row is None:
+            QMessageBox.warning(self, "선택 행 수정", "수정할 행을 먼저 선택해 주세요.")
+            return
+        values = self.collect_specimen_form_values()
+        if not self.validate_specimen_form_values(values):
+            return
+        values = self.prepare_image_for_specimen_record(values)
+        self.write_specimen_data_row(row, values)
+        self.autosave_specimen_draft()
+        self.set_specimen_save_status("선택 행을 수정했습니다.")
+
+    def load_selected_specimen_row_to_form(self):
+        previous_row = self._specimen_last_selected_row
+        row = self.current_specimen_data_row()
+
+        if previous_row is not None and previous_row != row:
+            values = self.collect_specimen_form_values()
+            if self.has_specimen_form_content(values):
+                self.write_specimen_data_row(previous_row, values)
+
+        self._specimen_last_selected_row = row
+        if row is None:
+            return
+        self.specimen_autosave_suspended = True
+        self._specimen_taxon_edited_fields = set()
+        for col, column_name in enumerate(SPECIMEN_ROW_COLUMNS):
+            item = self.specimen_data_table.item(row, col)
+            text = item.text() if item else ""
+            if column_name in SPECIMEN_STICKY_FIELDS and not text:
+                continue
+            self.set_form_value(column_name, text, self.specimen_form_widgets)
+            if column_name in SPECIMEN_TAXON_AUTOFILL_FIELDS:
+                is_edited = bool(item and item.background().color() == SPECIMEN_TAXON_EDITED_COLOR)
+                widget = self.specimen_form_widgets.get(column_name)
+                if is_edited:
+                    self._specimen_taxon_edited_fields.add(column_name)
+                if isinstance(widget, QLineEdit):
+                    widget.setStyleSheet(
+                        f"background-color: {SPECIMEN_TAXON_EDITED_COLOR.name()};" if is_edited else ""
+                    )
+        self.specimen_autosave_suspended = False
+
+    def on_specimen_data_table_item_changed(self, item: QTableWidgetItem):
+        if self.specimen_autosave_suspended:
+            return
+        column_name = SPECIMEN_ROW_COLUMNS[item.column()]
+        if column_name in SPECIMEN_TAXON_AUTOFILL_FIELDS:
+            item.setBackground(SPECIMEN_TAXON_EDITED_COLOR)
+        if item.column() == SPECIMEN_ROW_COLUMNS.index("NO."):
+            self.renumber_specimen_rows_below(item.row())
+        if item.row() == self.current_specimen_data_row():
+            self.load_selected_specimen_row_to_form()
+            if column_name == "국명":
+                self.fill_specimen_taxon_from_korean_name()
+                self.write_specimen_data_row(item.row(), self.collect_specimen_form_values())
+            elif column_name in DATE_FIELDS:
+                self.normalize_specimen_date_field(column_name)
+                self.write_specimen_data_row(item.row(), self.collect_specimen_form_values())
+        self.schedule_specimen_autosave()
+
+    def renumber_specimen_rows_below(self, changed_row: int):
+        no_column = SPECIMEN_ROW_COLUMNS.index("NO.")
+        item = self.specimen_data_table.item(changed_row, no_column)
+        try:
+            next_no = int(item.text() if item else "") + 1
+        except ValueError:
+            return
+
+        was_blocked = self.specimen_data_table.blockSignals(True)
+        try:
+            for row in range(changed_row + 1, self.specimen_data_table.rowCount()):
+                self.specimen_data_table.setItem(row, no_column, QTableWidgetItem(str(next_no)))
+                next_no += 1
+        finally:
+            self.specimen_data_table.blockSignals(was_blocked)
+
+    def clear_specimen_form(self):
+        for column_name in SPECIMEN_ROW_COLUMNS:
+            if column_name in SPECIMEN_STICKY_FIELDS:
+                continue
+            if column_name == "NO.":
+                self.set_form_value(column_name, self.next_specimen_no_value(), self.specimen_form_widgets)
+            elif column_name in SPECIMEN_DROPDOWN_DEFAULTS:
+                self.set_form_value(column_name, SPECIMEN_DROPDOWN_DEFAULTS[column_name], self.specimen_form_widgets)
+            elif column_name in TEXT_DEFAULTS:
+                self.set_form_value(column_name, TEXT_DEFAULTS[column_name], self.specimen_form_widgets)
+            else:
+                self.set_form_value(column_name, "", self.specimen_form_widgets)
+        self.reset_specimen_taxon_edit_tracking()
+        self.apply_specimen_project_to_form()
+        self.set_default_organization(self.specimen_form_widgets)
+        self.apply_specimen_organization_to_form()
+        self.schedule_specimen_autosave()
+
+    def collect_specimen_form_values(self) -> dict[str, Any]:
+        self.refresh_specimen_generated_fields()
+        return {
+            column_name: self.get_form_value(column_name, self.specimen_form_widgets)
+            for column_name in SPECIMEN_ROW_COLUMNS
+        }
+
+    def validate_specimen_form_values(self, values: dict[str, Any]) -> bool:
+        required_fields = [
+            "NO.", "분류코드", "사업명", "사업년도", "순번", "기관명", "기관코드", "국명", "학명",
+        ]
+        missing = [field for field in required_fields if values.get(field) in ("", 0)]
+        if missing:
+            QMessageBox.warning(self, "입력 확인", f"필수값을 입력해 주세요: {', '.join(missing)}")
+            return False
+        return True
+
+    def prepare_next_specimen_input(self, values: dict[str, Any]):
+        self.set_form_value("NO.", self.next_specimen_no_value(), self.specimen_form_widgets)
+        self.refresh_specimen_generated_fields()
+
+    def next_specimen_no_value(self) -> int:
+        max_no = 0
+        no_column = SPECIMEN_ROW_COLUMNS.index("NO.")
+        for row in range(self.specimen_data_table.rowCount()):
+            item = self.specimen_data_table.item(row, no_column)
+            max_no = max(max_no, self.safe_sort_int(item.text() if item else 0))
+        return max_no + 1
+
+    def current_specimen_data_row(self) -> int | None:
+        indexes = self.specimen_data_table.selectedIndexes()
+        if not indexes:
+            return None
+        return indexes[0].row()
+
+    def add_specimen_data_row(self, values: dict[str, Any]):
+        row = self.specimen_data_table.rowCount()
+        self.specimen_data_table.insertRow(row)
+        self.write_specimen_data_row(row, values)
+
+    def write_specimen_data_row(self, row: int, values: dict[str, Any]):
+        was_blocked = self.specimen_data_table.blockSignals(True)
+        try:
+            for col, column_name in enumerate(SPECIMEN_ROW_COLUMNS):
+                value = values.get(column_name, "")
+                item = QTableWidgetItem("" if value is None else str(value))
+                if column_name in SPECIMEN_TAXON_AUTOFILL_FIELDS and column_name in self._specimen_taxon_edited_fields:
+                    item.setBackground(SPECIMEN_TAXON_EDITED_COLOR)
+                self.specimen_data_table.setItem(row, col, item)
+        finally:
+            self.specimen_data_table.blockSignals(was_blocked)
+
+    def paste_clipboard_into_specimen_table(self):
+        text = QApplication.clipboard().text()
+        if not text:
+            return
+
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        if not lines:
+            return
+        rows = [line.split("\t") for line in lines]
+
+        row = self.current_specimen_data_row()
+        start_row = 0 if row is None else row
+        start_col = self.specimen_data_table.currentColumn()
+        start_col = 0 if start_col < 0 else start_col
+
+        was_blocked = self.specimen_data_table.blockSignals(True)
+        try:
+            for row_offset, row_values in enumerate(rows):
+                target_row = start_row + row_offset
+                while target_row >= self.specimen_data_table.rowCount():
+                    self.specimen_data_table.insertRow(self.specimen_data_table.rowCount())
+                for col_offset, value in enumerate(row_values):
+                    target_col = start_col + col_offset
+                    if target_col >= len(SPECIMEN_ROW_COLUMNS):
+                        break
+                    self.specimen_data_table.setItem(target_row, target_col, QTableWidgetItem(value))
+        finally:
+            self.specimen_data_table.blockSignals(was_blocked)
+
+        self.autosave_specimen_draft()
+        self.set_specimen_save_status(f"붙여넣기 완료: {len(rows)}행")
+
+    def go_to_next_specimen_row(self):
+        total = self.specimen_data_table.rowCount()
+        if total == 0:
+            self.set_specimen_save_status("작성된 행이 없습니다.")
+            return
+
+        row = self.current_specimen_data_row()
+        if row is None and self._specimen_last_selected_row is None:
+            values = self.collect_specimen_form_values()
+            if self.has_specimen_form_content(values):
+                reply = QMessageBox.question(
+                    self,
+                    "다음 행",
+                    "'입력'으로 저장하지 않은 작성 중인 내용이 있습니다. "
+                    "행을 선택하면 지금 작성 중인 내용은 사라집니다. 계속할까요?",
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    return
+
+        next_row = 0 if row is None else row + 1
+        if next_row >= total:
+            self.set_specimen_save_status("마지막 행입니다.")
+            return
+
+        self.specimen_data_table.selectRow(next_row)
+
+    def delete_selected_specimen_data_rows(self):
+        rows = sorted({index.row() for index in self.specimen_data_table.selectedIndexes()}, reverse=True)
+        if not rows:
+            QMessageBox.warning(self, "선택 행 삭제", "삭제할 행을 먼저 선택해 주세요.")
+            return
+        self.delete_selected_rows(self.specimen_data_table)
+        self.autosave_specimen_draft()
+        self.set_specimen_save_status(f"{len(rows)}개 행을 삭제했습니다.")
+
+    def clear_specimen_data_rows(self):
+        if self.specimen_data_table.rowCount() == 0:
+            return
+        reply = QMessageBox.question(self, "작성 내용 비우기", "작성 중인 행을 모두 비울까요?")
+        if reply == QMessageBox.Yes:
+            self.specimen_data_table.setRowCount(0)
+            self.autosave_specimen_draft()
+
+    def has_specimen_form_content(self, values: dict[str, Any]) -> bool:
+        ignored_fields = {"사업명", "사업년도", "순번", "기관명", "기관코드", "데이터베이스번호"}
+        for key, value in values.items():
+            if key in ignored_fields:
+                continue
+            if value not in ("", 0):
+                return True
+        return False
+
+    def is_duplicate_specimen_record(self, values: dict[str, Any]) -> bool:
+        current = {
+            column: "" if values.get(column) is None else str(values.get(column, "")) for column in SPECIMEN_ROW_COLUMNS
+        }
+        for record in self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS):
+            existing = {
+                column: "" if record.get(column) is None else str(record.get(column, "")) for column in SPECIMEN_ROW_COLUMNS
+            }
+            if existing == current:
+                return True
+        return False
+
+    def sync_current_specimen_form_to_table(self):
+        values = self.collect_specimen_form_values()
+        if not self.has_specimen_form_content(values):
+            return
+        values = self.prepare_image_for_specimen_record(values)
+
+        row = self.current_specimen_data_row()
+        if row is not None:
+            self.write_specimen_data_row(row, values)
+            return
+
+        if not self.is_duplicate_specimen_record(values):
+            self.add_specimen_data_row(values)
+
+    def connect_specimen_autosave_signal(self, widget: QLineEdit | QComboBox | QSpinBox):
+        if isinstance(widget, QLineEdit):
+            widget.textChanged.connect(self.schedule_specimen_autosave)
+        elif isinstance(widget, QComboBox):
+            widget.currentTextChanged.connect(self.schedule_specimen_autosave)
+        elif isinstance(widget, QSpinBox):
+            widget.valueChanged.connect(self.schedule_specimen_autosave)
+
+    def schedule_specimen_autosave(self, *_):
+        if self.specimen_autosave_suspended:
+            return
+        self.specimen_autosave_timer.start(700)
+
+    def autosave_specimen_draft(self):
+        if self.specimen_autosave_suspended or not hasattr(self, "specimen_data_table") or not self.specimen_form_widgets:
+            return
+        self.specimen_autosave_suspended = True
+        try:
+            records = self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
+            self.write_specimen_draft(records, self.collect_specimen_form_values())
+            self.set_specimen_save_status("자동 임시저장 완료")
+        finally:
+            self.specimen_autosave_suspended = False
+
+    def write_specimen_draft(self, rows: list[dict[str, Any]], current_form: dict[str, Any]):
+        payload = {
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "rows": rows,
+            "current_form": current_form,
+            "excel_path": self.specimen_excel_file_path,
+            "media_storage_dir": self.specimen_media_storage_dir,
+        }
+        self.write_json(SPECIMEN_DRAFT_FILE, payload)
+
+    def read_specimen_draft(self) -> dict[str, Any]:
+        data = self.read_json(SPECIMEN_DRAFT_FILE, {})
+        if not isinstance(data, dict):
+            return {"rows": [], "current_form": {}, "excel_path": "", "media_storage_dir": ""}
+        rows = data.get("rows", [])
+        current_form = data.get("current_form", {})
+        return {
+            "rows": rows if isinstance(rows, list) else [],
+            "current_form": current_form if isinstance(current_form, dict) else {},
+            "excel_path": str(data.get("excel_path", "")),
+            "media_storage_dir": str(data.get("media_storage_dir", "")),
+        }
+
+    def save_specimen_draft(self):
+        self.sync_current_specimen_form_to_table()
+        records = self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
+        self.write_specimen_draft(records, self.collect_specimen_form_values())
+        self.write_specimen_current_excel(records)
+        self.set_specimen_save_status(f"임시저장 완료: {len(records)}건")
+        QMessageBox.information(
+            self, "작성 내용 저장", f"작성 중인 표본 데이터 {len(records)}건을 저장했습니다.\n{SPECIMEN_DRAFT_FILE}"
+        )
+
+    def load_specimen_draft(self):
+        if not SPECIMEN_DRAFT_FILE.exists():
+            return
+        draft = self.read_specimen_draft()
+        self.specimen_autosave_suspended = True
+        try:
+            for record in draft["rows"]:
+                self.add_specimen_data_row(record)
+            current_form = draft.get("current_form", {})
+            if current_form:
+                for column_name in SPECIMEN_ROW_COLUMNS:
+                    self.set_form_value(column_name, current_form.get(column_name, ""), self.specimen_form_widgets)
+            self.specimen_excel_file_path = draft.get("excel_path", "")
+            if self.specimen_excel_file_path:
+                self.set_specimen_save_status(f"엑셀 자동반영 대상: {self.specimen_excel_file_path}")
+            self.specimen_media_storage_dir = draft.get("media_storage_dir", "")
+            if self.specimen_media_storage_dir and hasattr(self, "specimen_media_storage_path_input"):
+                self.specimen_media_storage_path_input.setText(self.specimen_media_storage_dir)
+        finally:
+            self.specimen_autosave_suspended = False
+
+    def reload_specimen_draft(self):
+        self.specimen_autosave_suspended = True
+        try:
+            self.specimen_data_table.setRowCount(0)
+        finally:
+            self.specimen_autosave_suspended = False
+        self.load_specimen_draft()
+        self.set_specimen_save_status("임시저장을 다시 불러왔습니다.")
+
+    def export_specimen_rows_to_excel(self):
+        self.sync_current_specimen_form_to_table()
+        records = self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
+        if not records:
+            QMessageBox.warning(self, "엑셀 저장", "저장할 행이 없습니다.")
+            return
+
+        default_name = f"new_specimen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        file_path, _ = QFileDialog.getSaveFileName(self, "표본 데이터 엑셀 저장", default_name, "Excel Files (*.xlsx)")
+        if not file_path:
+            return
+
+        if not file_path.lower().endswith(".xlsx"):
+            file_path += ".xlsx"
+
+        try:
+            self.write_specimen_excel_file(file_path, records)
+            final_path = self.final_excel_path(file_path)
+            self.write_specimen_final_excel_file(str(final_path), records)
+            self.reset_after_specimen_export()
+            QMessageBox.information(
+                self,
+                "엑셀 저장",
+                f"표본 데이터 엑셀을 저장했습니다.\n{file_path}\n{final_path}\n\n"
+                "작성 중이던 내용은 초기화되어 NO.가 1부터 다시 시작됩니다.",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "엑셀 저장 실패", str(exc))
+
+    def reset_after_specimen_export(self):
+        self.specimen_autosave_suspended = True
+        try:
+            self.specimen_data_table.setRowCount(0)
+        finally:
+            self.specimen_autosave_suspended = False
+        self.specimen_excel_file_path = ""
+        self.clear_specimen_form()
+        self.write_specimen_draft([], self.collect_specimen_form_values())
+        self.set_specimen_save_status("엑셀 저장 완료. 새 작성을 시작합니다 (NO. 1부터).")
+
+    def load_specimen_rows_from_excel(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "표본 데이터 엑셀 불러오기", "", "Excel Files (*.xlsx)")
+        if not file_path:
+            return
+
+        try:
+            df = pd.read_excel(file_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "엑셀 불러오기 실패", str(exc))
+            return
+
+        missing_columns = [column for column in SPECIMEN_ROW_COLUMNS if column not in df.columns]
+        if missing_columns:
+            QMessageBox.warning(
+                self, "엑셀 불러오기", f"'작성한 그대로' 형식의 엑셀이 아닙니다. 없는 컬럼: {', '.join(missing_columns)}"
+            )
+            return
+
+        if self.specimen_data_table.rowCount() > 0:
+            reply = QMessageBox.question(self, "엑셀 불러오기", "현재 작성 중인 내용을 지우고 불러올까요?")
+            if reply != QMessageBox.Yes:
+                return
+
+        self.specimen_autosave_suspended = True
+        try:
+            self.specimen_data_table.setRowCount(0)
+            for _, row in df.iterrows():
+                record = {column: self.clean_master_value(row[column]) for column in SPECIMEN_ROW_COLUMNS}
+                self.add_specimen_data_row(record)
+        finally:
+            self.specimen_autosave_suspended = False
+
+        self.specimen_excel_file_path = file_path
+        self.autosave_specimen_draft()
+        self.set_specimen_save_status(f"엑셀 불러오기 완료: {file_path} ({len(df)}건)")
+
+    def write_specimen_current_excel(self, records: list[dict[str, Any]]):
+        if not self.specimen_excel_file_path:
+            return
+        try:
+            self.write_specimen_excel_file(self.specimen_excel_file_path, records)
+            self.write_specimen_final_excel_file(str(self.final_excel_path(self.specimen_excel_file_path)), records)
+            self.set_specimen_save_status(f"엑셀 자동반영 완료: {self.specimen_excel_file_path}")
+        except Exception as exc:
+            self.set_specimen_save_status(f"엑셀 자동반영 실패: {exc}")
+
+    @staticmethod
+    def write_specimen_excel_file(file_path: str, records: list[dict[str, Any]]):
+        pd.DataFrame(records, columns=SPECIMEN_ROW_COLUMNS).to_excel(file_path, index=False)
+
+    @staticmethod
+    def write_specimen_final_excel_file(file_path: str, records: list[dict[str, Any]]):
+        final_records = [
+            {target: (record.get(source, "") if source else "") for target, source in SPECIMEN_FINAL_EXPORT_COLUMNS}
+            for record in records
+        ]
+        final_columns = [target for target, _ in SPECIMEN_FINAL_EXPORT_COLUMNS]
+        pd.DataFrame(final_records, columns=final_columns).to_excel(file_path, index=False)
+
+    def sync_specimen_media_filename_field(self, *_):
+        value = self.get_form_value("파일경로", self.specimen_form_widgets)
+        self.set_form_value("파일명", Path(value).name if value else "", self.specimen_form_widgets)
+
+    def normalize_specimen_date_field(self, field: str):
+        current = self.get_form_value(field, self.specimen_form_widgets)
+        self.set_form_value(field, self.normalize_date_text(current), self.specimen_form_widgets)
+
+    def set_specimen_species_status(self, message: str):
+        if hasattr(self, "specimen_species_status_label"):
+            self.specimen_species_status_label.setText(message)
+
+    def set_specimen_save_status(self, message: str):
+        if hasattr(self, "specimen_save_status_label"):
+            self.specimen_save_status_label.setText(message)
 
     def _build_project_tab(self) -> QWidget:
         tab = QWidget()
@@ -662,22 +1899,29 @@ class UploadTab(QWidget):
         self.organization_lookup = {self.organization_label(org): org for org in self.organizations}
 
     def refresh_combos(self):
-        if "사업명" not in self.form_widgets or "기관명" not in self.form_widgets:
-            return
-
         self.rebuild_lookups()
-        self.refresh_combo_items("사업명", list(self.project_lookup.keys()))
-        self.refresh_combo_items("기관명", list(self.organization_lookup.keys()))
-        self.set_default_organization()
-        self.apply_project_to_form()
-        self.apply_organization_to_form()
 
-    def refresh_combo_items(self, column_name: str, labels: list[str]):
-        widget = self.form_widgets.get(column_name)
+        if "사업명" in self.form_widgets and "기관명" in self.form_widgets:
+            self.refresh_combo_items("사업명", list(self.project_lookup.keys()))
+            self.refresh_combo_items("기관명", list(self.organization_lookup.keys()))
+            self.set_default_organization()
+            self.apply_project_to_form()
+            self.apply_organization_to_form()
+
+        if "사업명" in self.specimen_form_widgets and "기관명" in self.specimen_form_widgets:
+            self.refresh_combo_items("사업명", list(self.project_lookup.keys()), self.specimen_form_widgets)
+            self.refresh_combo_items("기관명", list(self.organization_lookup.keys()), self.specimen_form_widgets)
+            self.set_default_organization(self.specimen_form_widgets)
+            self.apply_specimen_project_to_form()
+            self.apply_specimen_organization_to_form()
+
+    def refresh_combo_items(self, column_name: str, labels: list[str], widgets: dict[str, Any] | None = None):
+        widgets = widgets if widgets is not None else self.form_widgets
+        widget = widgets.get(column_name)
         if not isinstance(widget, QComboBox):
             return
 
-        selected_value = self.get_form_value(column_name) if widget.count() else ""
+        selected_value = self.get_form_value(column_name, widgets) if widget.count() else ""
         widget.blockSignals(True)
         widget.clear()
         widget.addItems(labels)
@@ -686,27 +1930,29 @@ class UploadTab(QWidget):
             widget.setCurrentIndex(selected_index)
         widget.blockSignals(False)
 
-    def apply_project_to_form(self, label: str = ""):
-        if not label and isinstance(self.form_widgets.get("사업명"), QComboBox):
-            label = self.form_widgets["사업명"].currentText()
+    def apply_project_to_form(self, label: str = "", widgets: dict[str, Any] | None = None, on_change=None):
+        widgets = widgets if widgets is not None else self.form_widgets
+        if not label and isinstance(widgets.get("사업명"), QComboBox):
+            label = widgets["사업명"].currentText()
         project = self.project_lookup.get(label, {})
         if not project:
             return
-        self.set_form_value("사업년도", project.get("사업년도", datetime.now().year))
-        self.set_form_value("순번", project.get("순번", 0))
-        self.refresh_generated_fields()
+        self.set_form_value("사업년도", project.get("사업년도", datetime.now().year), widgets)
+        self.set_form_value("순번", project.get("순번", 0), widgets)
+        (on_change or self.refresh_generated_fields)()
 
-    def apply_organization_to_form(self, label: str = ""):
-        if not label and isinstance(self.form_widgets.get("기관명"), QComboBox):
-            label = self.form_widgets["기관명"].currentText()
+    def apply_organization_to_form(self, label: str = "", widgets: dict[str, Any] | None = None, on_change=None):
+        widgets = widgets if widgets is not None else self.form_widgets
+        if not label and isinstance(widgets.get("기관명"), QComboBox):
+            label = widgets["기관명"].currentText()
         organization = self.organization_lookup.get(label, {})
         if not organization:
             return
-        self.set_form_value("기관코드", organization.get("기관코드", ""))
-        self.refresh_generated_fields()
+        self.set_form_value("기관코드", organization.get("기관코드", ""), widgets)
+        (on_change or self.refresh_generated_fields)()
 
-    def set_default_organization(self):
-        widget = self.form_widgets.get("기관명")
+    def set_default_organization(self, widgets: dict[str, Any] | None = None):
+        widget = (widgets if widgets is not None else self.form_widgets).get("기관명")
         if not isinstance(widget, QComboBox):
             return
         for row in range(widget.count()):
@@ -789,6 +2035,15 @@ class UploadTab(QWidget):
             self.renumber_rows_below(item.row())
         if item.row() == self.current_data_row():
             self.load_selected_row_to_form()
+            column_name = ROW_COLUMNS[item.column()]
+            if column_name == "국명":
+                # 표에서 국명 셀을 직접 고쳤을 때도 폼에서 편집할 때와 동일하게
+                # 학명/종고유ID를 조회해서 채우고, 그 결과를 다시 표에 반영
+                self.fill_species_from_korean_name()
+                self.write_data_row(item.row(), self.collect_form_values())
+            elif column_name in DATE_FIELDS:
+                self.normalize_date_field(column_name)
+                self.write_data_row(item.row(), self.collect_form_values())
         self.schedule_autosave()
 
     def renumber_rows_below(self, changed_row: int):
@@ -817,6 +2072,8 @@ class UploadTab(QWidget):
                 self.set_form_value(column_name, 1)
             elif column_name in DROPDOWN_DEFAULTS:
                 self.set_form_value(column_name, DROPDOWN_DEFAULTS[column_name])
+            elif column_name in TEXT_DEFAULTS:
+                self.set_form_value(column_name, TEXT_DEFAULTS[column_name])
             else:
                 self.set_form_value(column_name, "")
         self.apply_project_to_form()
@@ -998,7 +2255,7 @@ class UploadTab(QWidget):
             for file_path, media_type in media_files:
                 self.set_form_value("미디어타입", media_type)
                 self.set_form_value("NO.", self.next_no_value())
-                self.set_form_value("미디어파일", str(file_path))
+                self.set_form_value("파일경로", str(file_path))
                 self.apply_location_from_media(file_path, media_type)
                 self.apply_duration_from_media(file_path, media_type)
                 self.apply_date_from_media(file_path, media_type)
@@ -1033,7 +2290,9 @@ class UploadTab(QWidget):
         if not file_path:
             return
 
-        self.set_form_value("미디어파일", file_path)
+        self.set_form_value("파일경로", file_path)
+        self.set_form_value("원본경로", "")
+        self.set_form_value("원본파일명", "")
         self.apply_location_from_media(Path(file_path), media_type)
         self.apply_duration_from_media(Path(file_path), media_type)
         self.apply_date_from_media(Path(file_path), media_type)
@@ -1143,7 +2402,7 @@ class UploadTab(QWidget):
         return str(creation_time).split("T")[0]
 
     def prepare_media_for_record(self, values: dict[str, Any]) -> dict[str, Any]:
-        media_path_text = normalize_text(values.get("미디어파일"))
+        media_path_text = normalize_text(values.get("파일경로"))
         if not media_path_text:
             return values
 
@@ -1154,8 +2413,15 @@ class UploadTab(QWidget):
         saved_path = self.save_media_file_to_storage(source_path, values)
         if saved_path:
             values = values.copy()
-            values["미디어파일"] = str(saved_path)
-            self.set_form_value("미디어파일", str(saved_path))
+            if not normalize_text(values.get("원본경로")):
+                # 최초 저장 시 1번만 기록 -> 재저장해도 진짜 원본 경로가 덮어써지지 않음
+                values["원본경로"] = str(source_path)
+                values["원본파일명"] = source_path.name
+                self.set_form_value("원본경로", str(source_path))
+                self.set_form_value("원본파일명", source_path.name)
+            values["파일경로"] = str(saved_path)
+            values["파일명"] = saved_path.name
+            self.set_form_value("파일경로", str(saved_path))
             self.apply_location_from_media(saved_path, values.get("미디어타입", ""))
             values["위도"] = self.get_form_value("위도")
             values["경도"] = self.get_form_value("경도")
@@ -1198,8 +2464,19 @@ class UploadTab(QWidget):
             return None
 
         expected_stem = self.safe_filename(db_number)
-        if source_path.parent.resolve() == target_dir.resolve() and source_path.stem == expected_stem:
+        same_folder = source_path.parent.resolve() == target_dir.resolve()
+        if same_folder and source_path.stem == expected_stem:
+            # 이미 이 폴더에 DB번호 이름으로 저장돼 있는 파일 -> 복사할 필요 없음
             return source_path
+        if same_folder:
+            QMessageBox.warning(
+                self,
+                "미디어 저장",
+                "미디어 저장 위치가 원본 파일이 있는 폴더와 같습니다. "
+                "같은 폴더로 복사하면 원본과 뒤섞이니, 원본과 다른 폴더를 저장 위치로 선택해 주세요.",
+            )
+            self.set_save_status("미디어 저장 실패: 저장 위치가 원본 폴더와 동일합니다.")
+            return None
 
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
@@ -1239,7 +2516,7 @@ class UploadTab(QWidget):
         return result.returncode == 0 and output_path.exists()
 
     def generate_video_thumbnails(self):
-        media_column = ROW_COLUMNS.index("미디어파일")
+        media_column = ROW_COLUMNS.index("파일경로")
         type_column = ROW_COLUMNS.index("미디어타입")
 
         video_paths = []
@@ -1822,8 +3099,8 @@ class UploadTab(QWidget):
                 records.append(record)
         return records
 
-    def get_form_value(self, column_name: str) -> Any:
-        widget = self.form_widgets[column_name]
+    def get_form_value(self, column_name: str, widgets: dict[str, Any] | None = None) -> Any:
+        widget = (widgets if widgets is not None else self.form_widgets)[column_name]
         if isinstance(widget, QSpinBox):
             return widget.value()
         if isinstance(widget, QComboBox):
@@ -1835,8 +3112,8 @@ class UploadTab(QWidget):
             return text
         return widget.text().strip()
 
-    def set_form_value(self, column_name: str, value: Any):
-        widget = self.form_widgets.get(column_name)
+    def set_form_value(self, column_name: str, value: Any, widgets: dict[str, Any] | None = None):
+        widget = (widgets if widgets is not None else self.form_widgets).get(column_name)
         if widget is None:
             return
 

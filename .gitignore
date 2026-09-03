@@ -49,6 +49,8 @@ Thumbs.db
 data/
 output/
 temp/
+cache/
+
 
 # 로그
 *.log
