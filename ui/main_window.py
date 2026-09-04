@@ -3,6 +3,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import ( QMainWindow, QTableWidget, QTableWidgetItem,QTabWidget, QMessageBox)
 from ui.tabs.species_master_tab import SpeciesMasterTab
 from ui.tabs.species_review_tab import SpeciesReviewTab
@@ -10,7 +11,7 @@ from ui.tabs.upload_tab import UploadTab
 from ui.tabs.validataion_tab import ValidationTab
 from ui.tabs.sql_tab import SqlTab
 from ui.tabs.gbif_tab import GbifTab
-from config.paths import MASTER_FILE_PATH, LOCAL_VERSION_FILE_PATH, MASTER_DIR, META_DIR ,HISTORY_DIR
+from config.paths import ASSETS_DIR, MASTER_FILE_PATH, LOCAL_VERSION_FILE_PATH, MASTER_DIR, META_DIR ,HISTORY_DIR
 
 
 
@@ -23,6 +24,7 @@ class MainWindow(QMainWindow):
 
         
         self.setWindowTitle("BioFlow") #창 제목 설정
+        self.setWindowIcon(QIcon(str(ASSETS_DIR / "favicon" / "icon_256.png"))) #창/작업표시줄 아이콘
         self.resize(1200,800) #창 크기 설정
 
         self.init_ui()

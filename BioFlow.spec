@@ -13,7 +13,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('data', 'data')],
+    datas=[('data', 'data'), ('assets', 'assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -24,10 +24,21 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# 더블클릭 후 창이 뜨기까지 몇 초 걸리는데 그동안 아무 반응이 없어 여러 번 누르게 되는
+# 문제 때문에 추가 - 파이썬 인터프리터가 뜨기도 전에 부트로더가 바로 이 이미지를 띄움
+# (app.py에서 메인창이 뜨면 pyi_splash.close()로 닫음)
+splash = Splash(
+    'assets/splash/splash_light.png',
+    binaries=a.binaries,
+    datas=a.datas,
+    text_pos=None,
+    always_on_top=True,
+)
+
 exe = EXE(
     pyz,
     a.scripts,
-    [],
+    splash,
     exclude_binaries=True,
     name='BioFlow',
     debug=False,
@@ -40,9 +51,11 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/favicon/favicon.ico',
 )
 coll = COLLECT(
     exe,
+    splash.binaries,
     a.binaries,
     a.datas,
     strip=False,

@@ -1,6 +1,8 @@
 import json
+import logging
 import shutil
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -8,10 +10,13 @@ from typing import Any
 from config.paths import DATA_DIR
 from services.species_master_service import SpeciesMasterService
 
+logger = logging.getLogger("bioflow.data_update")
+
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/jin123346/BioFlow/main"
 REMOTE_VERSION_URL = f"{GITHUB_RAW_BASE}/data/version.json"
 REMOTE_MASTER_URL = f"{GITHUB_RAW_BASE}/data/master/species_master.xlsx"
 REMOTE_INSTITUTION_URL = f"{GITHUB_RAW_BASE}/data/institution/institution.json"
+REMOTE_PROJECTS_URL = f"{GITHUB_RAW_BASE}/data/reference/upload_projects.json"
 
 # 로컬에 설치된 버전 = 지금 앱이 쓰는 data/version.json (최초 실행 시 exe에 번들된 값이
 # 그대로 시드되고, apply_update 성공 시 여기로 새 버전을 기록함) -> 이거 하나만 기준으로 비교.
@@ -24,8 +29,15 @@ LOCAL_VERSION_FILE = DATA_DIR / "version.json"
 # 파일이 커지거나 체감 지연이 생기면 QThread로 옮기는 걸 고려.
 
 
-def _fetch_bytes(url: str, timeout: int = 5) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "BioFlow-update-check/1.0"})
+def _fetch_bytes(url: str, timeout: int = 5, bust_cache: bool = False) -> bytes:
+    # raw.githubusercontent.com은 CDN(Fastly) 캐시를 태워서, push 직후 몇 분간은 예전
+    # 내용이 그대로 나올 수 있음 -> 버전 체크처럼 "항상 최신이어야 하는" 요청만 매번 다른
+    # URL(쿼리스트링)로 만들어 캐시를 우회함
+    if bust_cache:
+        url = f"{url}?_={int(time.time())}"
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "BioFlow-update-check/1.0", "Cache-Control": "no-cache"}
+    )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
 
@@ -46,20 +58,25 @@ def _write_local_version(version: str):
 
 def check_for_update() -> dict[str, Any] | None:
     """원격 data/version.json을 조회해서 로컬 data/version.json과 다르면 그 정보를 반환.
-    네트워크 실패/버전 동일 시 None (조용히 넘어감 - 오프라인이어도 앱 시작에 지장 없음)."""
+    네트워크 실패 시 None (조용히 넘어감 - 오프라인이어도 앱 시작에 지장 없음). 실패/결과는
+    로그로 남겨서, "진짜 업데이트가 없는 건지" "확인 자체가 실패한 건지" 나중에 구분 가능."""
     try:
-        remote = json.loads(_fetch_bytes(REMOTE_VERSION_URL).decode("utf-8"))
-    except Exception:
+        remote = json.loads(_fetch_bytes(REMOTE_VERSION_URL, bust_cache=True).decode("utf-8"))
+    except Exception as exc:
+        logger.info("check_for_update: 원격 version.json 조회 실패 - %s", exc)
         return None
 
     remote_version = str(remote.get("version", ""))
-    if not remote_version or remote_version == _read_local_version():
+    local_version = _read_local_version()
+    logger.info("check_for_update: remote=%r local=%r", remote_version, local_version)
+    if not remote_version or remote_version == local_version:
         return None
     return remote
 
 
 def apply_update(remote_info: dict[str, Any]) -> None:
-    """원격 species_master.xlsx / institution.json을 내려받아 로컬에 반영."""
+    """원격 species_master.xlsx / institution.json을 내려받아 로컬에 반영하고,
+    사업 목록(upload_projects.json)은 사용자가 직접 추가했을 수 있어 덮어쓰지 않고 병합."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         master_tmp = Path(tmp_dir) / "species_master.xlsx"
         master_tmp.write_bytes(_fetch_bytes(REMOTE_MASTER_URL, timeout=30))
@@ -73,4 +90,38 @@ def apply_update(remote_info: dict[str, Any]) -> None:
         institution_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(institution_tmp, institution_dir / "institution.json")
 
+        try:
+            remote_projects = json.loads(_fetch_bytes(REMOTE_PROJECTS_URL, timeout=15).decode("utf-8"))
+            _merge_remote_projects(remote_projects)
+        except Exception as exc:
+            # 사업 목록은 부가 항목이라 실패해도 마스터/기관 업데이트 자체는 그대로 성공 처리
+            logger.info("apply_update: 사업 목록 업데이트 건너뜀 - %s", exc)
+
     _write_local_version(str(remote_info.get("version", "")))
+
+
+def _merge_remote_projects(remote_projects: list[dict[str, Any]]) -> None:
+    projects_file = DATA_DIR / "reference" / "upload_projects.json"
+    try:
+        with projects_file.open("r", encoding="utf-8") as f:
+            local_projects = json.load(f)
+        if not isinstance(local_projects, list):
+            local_projects = []
+    except Exception:
+        local_projects = []
+
+    existing_keys = {(p.get("사업년도"), p.get("순번")) for p in local_projects}
+    added = 0
+    for project in remote_projects:
+        key = (project.get("사업년도"), project.get("순번"))
+        if key in existing_keys:
+            continue
+        local_projects.append(project)
+        existing_keys.add(key)
+        added += 1
+
+    if added:
+        projects_file.parent.mkdir(parents=True, exist_ok=True)
+        with projects_file.open("w", encoding="utf-8") as f:
+            json.dump(local_projects, f, ensure_ascii=False, indent=2)
+    logger.info("apply_update: 사업 목록 %d건 새로 병합", added)

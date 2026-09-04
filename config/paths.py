@@ -11,6 +11,9 @@ FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path.home() / "Documents" / "BioFlow"
 BUNDLED_DATA_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR)) / "data"
 
+# 아이콘 등 앱과 함께 배포되는 고정 리소스 (사용자 데이터 아님, 읽기 전용)
+ASSETS_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR)) / "assets"
+
 DATA_DIR = (APP_DIR / "data") if FROZEN else (BASE_DIR / "data")
 CACHE_DIR = (APP_DIR / "cache") if FROZEN else (BASE_DIR / "cache")
 LOG_DIR = (APP_DIR / "logs") if FROZEN else (BASE_DIR / "logs")

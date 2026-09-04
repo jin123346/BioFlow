@@ -35,6 +35,14 @@ def main():
     window = MainWindow()
     window.show()
 
+    # 빌드 시 스플래시를 켰으면(BioFlow.spec) 메인창이 뜬 시점에 닫음. 개발 모드(python
+    # app.py)에는 pyi_splash 모듈 자체가 없어서 그냥 넘어감.
+    try:
+        import pyi_splash
+        pyi_splash.close()
+    except ImportError:
+        pass
+
     # 창이 뜬 뒤 잠깐 있다가 기준 데이터(종정보 마스터/기관 정보) 새 버전이 있는지 확인
     QTimer.singleShot(1500, lambda: check_for_data_update(window))
 
