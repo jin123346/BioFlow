@@ -4,7 +4,10 @@ from datetime import datetime
 from pathlib import Path
 import pandas as pd
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import ( QMainWindow, QTableWidget, QTableWidgetItem,QTabWidget, QMessageBox)
+from PySide6.QtWidgets import (
+    QHBoxLayout, QLabel, QListWidget, QMainWindow, QStackedWidget,
+    QTableWidget, QTableWidgetItem, QMessageBox, QVBoxLayout, QWidget,
+)
 from ui.tabs.species_master_tab import SpeciesMasterTab
 from ui.tabs.species_review_tab import SpeciesReviewTab
 from ui.tabs.upload_tab import UploadTab
@@ -30,8 +33,31 @@ class MainWindow(QMainWindow):
         self.init_ui()
 
     def init_ui(self):
-        self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
+        central = QWidget()
+        self.setCentralWidget(central)
+        root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        sidebar = QWidget()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(200)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
+
+        logo = QLabel("BioFlow")
+        logo.setObjectName("SidebarLogo")
+        sidebar_layout.addWidget(logo)
+
+        self.nav_list = QListWidget()
+        self.nav_list.setObjectName("SidebarNav")
+        sidebar_layout.addWidget(self.nav_list)
+        sidebar_layout.addStretch()
+        root_layout.addWidget(sidebar)
+
+        self.pages = QStackedWidget()
+        root_layout.addWidget(self.pages, 1)
 
         self.master_tab = SpeciesMasterTab()
         self.upload_tab = UploadTab()
@@ -40,13 +66,19 @@ class MainWindow(QMainWindow):
         self.sql_tab = SqlTab()
         self.gbif_tab = GbifTab()
 
+        for page, label in [
+            (self.master_tab, "종정보 마스터"),
+            (self.upload_tab, "신규 데이터"),
+            (self.species_review_tab, "신규/업데이트 종 정리"),
+            (self.validation_tab, "비교 결과"),
+            (self.sql_tab, "SQL 생성"),
+            (self.gbif_tab, "GBIF 데이터"),
+        ]:
+            self.pages.addWidget(page)
+            self.nav_list.addItem(label)
 
-        self.tabs.addTab(self.master_tab, "종정보 마스터")
-        self.tabs.addTab(self.upload_tab, "신규 데이터")
-        self.tabs.addTab(self.species_review_tab, "신규/업데이트 종 정리")
-        self.tabs.addTab(self.validation_tab, "비교 결과")
-        self.tabs.addTab(self.sql_tab, "SQL 생성")
-        self.tabs.addTab(self.gbif_tab, "GBIF 데이터")
+        self.nav_list.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.nav_list.setCurrentRow(0)
 
     def closeEvent(self, event):
         has_rows = self.upload_tab.data_table.rowCount() > 0

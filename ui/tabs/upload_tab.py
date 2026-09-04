@@ -2474,13 +2474,23 @@ class UploadTab(QWidget):
         if not file_path:
             return
 
+        source_path = Path(file_path)
+        # 미디어타입은 세션 내내 유지되는 값(STICKY_FIELDS)이라, 이전 행에서 "동영상"을
+        # 고른 채로 남아있으면 실제로 고른 파일이 이미지여도 안 바뀜 -> 저장 시 엉뚱하게
+        # 동영상 필수값(제목/재생시간 등) 검증에 걸려서 조용히 저장이 안 되던 원인.
+        # 고른 파일 확장자로 다시 맞춰줌.
+        detected_type = MEDIA_EXTENSION_TYPES.get(source_path.suffix.lower())
+        if detected_type and detected_type != media_type:
+            media_type = detected_type
+            self.set_form_value("미디어타입", media_type)
+
         self.set_form_value("파일경로", file_path)
         # 새로 고른 원본 파일 정보를 바로 기록 (저장 시 파일경로/파일명만 새 저장위치로 바뀜)
         self.set_form_value("원본경로", file_path)
-        self.set_form_value("원본파일명", Path(file_path).name)
-        self.apply_location_from_media(Path(file_path), media_type)
-        self.apply_duration_from_media(Path(file_path), media_type)
-        self.apply_date_from_media(Path(file_path), media_type)
+        self.set_form_value("원본파일명", source_path.name)
+        self.apply_location_from_media(source_path, media_type)
+        self.apply_duration_from_media(source_path, media_type)
+        self.apply_date_from_media(source_path, media_type)
         self.schedule_autosave()
 
     def apply_location_from_media(self, source_path: Path, media_type: str):
@@ -2744,6 +2754,19 @@ class UploadTab(QWidget):
         return result.returncode == 0 and output_path.exists()
 
     def generate_video_thumbnails(self):
+        success, skipped, failed, total = self.capture_pending_video_thumbnails()
+        if total == 0:
+            QMessageBox.information(self, "동영상 캡처", "캡처할 동영상 행이 없습니다 (미디어 저장이 먼저 필요합니다).")
+            return
+
+        QMessageBox.information(
+            self, "동영상 캡처", f"완료: {success}건 생성, {skipped}건 이미 있음, {failed}건 실패(ffmpeg 필요)."
+        )
+        self.set_save_status(f"동영상 캡처 이미지 생성 완료: {success}건 생성 / {failed}건 실패")
+
+    def capture_pending_video_thumbnails(self) -> tuple[int, int, int, int]:
+        # "작성 내용 저장"/"엑셀로 저장"에서 동영상 행을 저장할 때 같은 파일명(.jpg)으로
+        # 캡처본도 같이 남기기 위해 호출됨(silent). "동영상 캡처 이미지 생성" 버튼도 이걸 재사용.
         media_column = ROW_COLUMNS.index("파일경로")
         type_column = ROW_COLUMNS.index("미디어타입")
 
@@ -2759,10 +2782,6 @@ class UploadTab(QWidget):
             if video_path.exists():
                 video_paths.append(video_path)
 
-        if not video_paths:
-            QMessageBox.information(self, "동영상 캡처", "캡처할 동영상 행이 없습니다 (미디어 저장이 먼저 필요합니다).")
-            return
-
         success, skipped, failed = 0, 0, 0
         for video_path in video_paths:
             thumbnail_path = video_path.with_suffix(".jpg")
@@ -2773,11 +2792,7 @@ class UploadTab(QWidget):
                 success += 1
             else:
                 failed += 1
-
-        QMessageBox.information(
-            self, "동영상 캡처", f"완료: {success}건 생성, {skipped}건 이미 있음, {failed}건 실패(ffmpeg 필요)."
-        )
-        self.set_save_status(f"동영상 캡처 이미지 생성 완료: {success}건 생성 / {failed}건 실패")
+        return success, skipped, failed, len(video_paths)
 
     @staticmethod
     def safe_filename(value: str) -> str:
@@ -3054,6 +3069,7 @@ class UploadTab(QWidget):
     def save_draft(self):
         self.sync_current_form_to_table()
         self.copy_pending_media_for_all_rows()
+        self.capture_pending_video_thumbnails()
         records = self.table_to_records(self.data_table, ROW_COLUMNS)
         self.write_draft(records, self.collect_form_values())
         self.write_current_excel(records)
@@ -3093,6 +3109,7 @@ class UploadTab(QWidget):
     def export_rows_to_excel(self):
         self.sync_current_form_to_table()
         self.copy_pending_media_for_all_rows()
+        self.capture_pending_video_thumbnails()
         records = self.table_to_records(self.data_table, ROW_COLUMNS)
         if not records:
             QMessageBox.warning(self, "엑셀 저장", "저장할 행이 없습니다.")

@@ -17,6 +17,10 @@ REMOTE_VERSION_URL = f"{GITHUB_RAW_BASE}/data/version.json"
 REMOTE_MASTER_URL = f"{GITHUB_RAW_BASE}/data/master/species_master.xlsx"
 REMOTE_INSTITUTION_URL = f"{GITHUB_RAW_BASE}/data/institution/institution.json"
 REMOTE_PROJECTS_URL = f"{GITHUB_RAW_BASE}/data/reference/upload_projects.json"
+# 앱(exe) 자체의 새 릴리즈 확인용. data/version.json(종정보 마스터 버전)과는 별개 파일.
+# 새 버전을 배포할 때 이 파일의 version/download_url을 같이 올려야 알림이 뜸.
+REMOTE_APP_VERSION_URL = f"{GITHUB_RAW_BASE}/app_version.json"
+DEFAULT_DOWNLOAD_URL = "https://github.com/jin123346/BioFlow/releases/latest"
 
 # 로컬에 설치된 버전 = 지금 앱이 쓰는 data/version.json (최초 실행 시 exe에 번들된 값이
 # 그대로 시드되고, apply_update 성공 시 여기로 새 버전을 기록함) -> 이거 하나만 기준으로 비교.
@@ -71,6 +75,24 @@ def check_for_update() -> dict[str, Any] | None:
     logger.info("check_for_update: remote=%r local=%r", remote_version, local_version)
     if not remote_version or remote_version == local_version:
         return None
+    return remote
+
+
+def check_for_app_update(local_version: str) -> dict[str, Any] | None:
+    """앱(exe) 자체의 새 릴리즈가 있는지 원격 app_version.json으로 확인.
+    exe는 실행 중인 자기 자신을 못 바꿔치기하므로, 여기선 새 버전 유무와 다운로드 페이지
+    URL만 반환 -- 실제 설치는 사용자가 그 페이지에서 직접 받아서 함."""
+    try:
+        remote = json.loads(_fetch_bytes(REMOTE_APP_VERSION_URL, bust_cache=True).decode("utf-8"))
+    except Exception as exc:
+        logger.info("check_for_app_update: 원격 app_version.json 조회 실패 - %s", exc)
+        return None
+
+    remote_version = str(remote.get("version", ""))
+    logger.info("check_for_app_update: remote=%r local=%r", remote_version, local_version)
+    if not remote_version or not local_version or remote_version == local_version:
+        return None
+    remote.setdefault("download_url", DEFAULT_DOWNLOAD_URL)
     return remote
 
 

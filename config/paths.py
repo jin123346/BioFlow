@@ -14,6 +14,17 @@ BUNDLED_DATA_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR)) / "data"
 # 아이콘 등 앱과 함께 배포되는 고정 리소스 (사용자 데이터 아님, 읽기 전용)
 ASSETS_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR)) / "assets"
 
+# 지금 실행 중인 앱(exe) 자체의 버전 (빌드 시 BioFlow.spec이 datas로 같이 번들함).
+# data/version.json(종정보 마스터 버전)과는 별개.
+APP_VERSION_FILE = Path(getattr(sys, "_MEIPASS", BASE_DIR)) / "VERSION"
+
+
+def get_app_version() -> str:
+    try:
+        return APP_VERSION_FILE.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
 DATA_DIR = (APP_DIR / "data") if FROZEN else (BASE_DIR / "data")
 CACHE_DIR = (APP_DIR / "cache") if FROZEN else (BASE_DIR / "cache")
 LOG_DIR = (APP_DIR / "logs") if FROZEN else (BASE_DIR / "logs")

@@ -1,11 +1,13 @@
 import logging
 import sys
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMessageBox #PySide6 앱 실행 객체
-from config.paths import LOG_DIR, ensure_data_seeded
-from services.data_update_service import apply_update, check_for_update
+from config.paths import LOG_DIR, ensure_data_seeded, get_app_version
+from services.data_update_service import apply_update, check_for_app_update, check_for_update
 from ui.main_window import MainWindow #메인 창 클래스
+from ui.theme import STYLE_SHEET, install_scroll_wheel_guard
 
 LOG_FILE = LOG_DIR / "app.log"
 
@@ -30,6 +32,8 @@ def main():
     install_error_logging()
     ensure_data_seeded()
     app = QApplication(sys.argv)  #GUI 프로그램 시작 준비
+    app.setStyleSheet(STYLE_SHEET)
+    install_scroll_wheel_guard()
 
     #창 생성하고 화면에 보여줌
     window = MainWindow()
@@ -45,6 +49,8 @@ def main():
 
     # 창이 뜬 뒤 잠깐 있다가 기준 데이터(종정보 마스터/기관 정보) 새 버전이 있는지 확인
     QTimer.singleShot(1500, lambda: check_for_data_update(window))
+    # 앱(exe) 자체의 새 릴리즈가 있는지도 별도로 확인 (데이터 업데이트와 독립적)
+    QTimer.singleShot(2000, lambda: check_for_app_release(window))
 
     #이벤트 루프 실행, 버튼 클릭, 창 이동 같은 GUI 동작을 계속 기다림
     sys.exit(app.exec())
@@ -67,6 +73,20 @@ def check_for_data_update(window):
         QMessageBox.information(window, "업데이트 완료", "기준 데이터를 최신 버전으로 업데이트했습니다.\n앱을 다시 시작해 주세요.")
     except Exception as exc:
         QMessageBox.warning(window, "업데이트 실패", f"업데이트 중 문제가 발생했습니다: {exc}")
+
+
+def check_for_app_release(window):
+    remote_info = check_for_app_update(get_app_version())
+    if not remote_info:
+        return
+    reply = QMessageBox.question(
+        window,
+        "새 버전 안내",
+        f"BioFlow 새 버전 {remote_info.get('version')}이(가) 나왔습니다.\n다운로드 페이지를 열까요?",
+        QMessageBox.Yes | QMessageBox.No,
+    )
+    if reply == QMessageBox.Yes:
+        QDesktopServices.openUrl(QUrl(remote_info["download_url"]))
 
 
 if __name__=="__main__":
