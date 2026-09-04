@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config.paths import MASTER_FILE_PATH
+from config.paths import LOCAL_VERSION_FILE_PATH, MASTER_FILE_PATH
+from services.data_update_service import LOCAL_VERSION_FILE
 from services.species_master_service import SpeciesMasterService
 from services.species_compare_service import SpeciesCompareService
 from utils.excel_utils import find_target_sheet_name
@@ -48,6 +50,11 @@ class SpeciesMasterTab(QWidget):
 
         title_label = QLabel("종정보 마스터 관리")
         main_layout.addWidget(title_label)
+
+        self.version_info_label = QLabel("")
+        self.version_info_label.setStyleSheet("color: #555;")
+        main_layout.addWidget(self.version_info_label)
+        self.refresh_version_info_label()
 
         file_layout = QHBoxLayout()
 
@@ -179,8 +186,29 @@ class SpeciesMasterTab(QWidget):
             self.append_log(f"로컬 저장 성공 : {result['master_path']}")
             self.append_log(f"백업 저장 성공 : {result['backup_path']}")
             self.append_log(f"버전 정보 저장 성공 : {result['version_path']}")
+            self.refresh_version_info_label()
         except Exception as e:
             self.append_log(f"로컬 저장 실패 : {str(e)}")
+
+    def refresh_version_info_label(self):
+        # data/version.json: GitHub 기준 데이터 버전(자동 업데이트 확인용)과 비교하는 값
+        # data/meta/local_version.json: 이 PC에 마지막으로 실제 저장된 시각(수동 업로드든
+        # 자동 업데이트든 공통) -> 업데이트가 실제로 반영됐는지 눈으로 바로 확인하는 용도
+        data_version = "알 수 없음"
+        try:
+            with LOCAL_VERSION_FILE.open("r", encoding="utf-8") as f:
+                data_version = json.load(f).get("version") or "알 수 없음"
+        except Exception:
+            pass
+
+        last_saved = "저장 이력 없음"
+        try:
+            with LOCAL_VERSION_FILE_PATH.open("r", encoding="utf-8") as f:
+                last_saved = json.load(f).get("update_at") or "저장 이력 없음"
+        except Exception:
+            pass
+
+        self.version_info_label.setText(f"기준 데이터 버전: {data_version}   |   마지막 로컬 저장: {last_saved}")
 
     def load_last_species_master(self):
         self.append_log("종정보 마스터 확인 중...")
