@@ -114,18 +114,33 @@ class SpeciesMasterService:
         "분류군": ["분류체계명(국문)", "분류체계명(라틴)"],
     }
 
-    def search(self, df: pd.DataFrame, search_type: str, keyword: str) -> pd.DataFrame:
-        keyword = normalize_text(keyword).lower()
-        if df is None or not keyword:
-            return df.iloc[0:0] if df is not None else pd.DataFrame()
+    def search(self, df: pd.DataFrame, filters: dict) -> pd.DataFrame:
+        """filters: {"학명": "tigris", "분류군": "고양이과", ...} 형태.
+        채워진 조건끼리는 AND, 한 조건 안의 여러 컬럼(분류군의 국문/라틴 등)은 OR."""
+        if df is None:
+            return pd.DataFrame()
 
-        columns = [c for c in self.SEARCH_COLUMNS.get(search_type, []) if c in df.columns]
-        if not columns:
+        mask = pd.Series(True, index=df.index)
+        has_condition = False
+
+        for search_type, keyword in filters.items():
+            keyword = normalize_text(keyword).lower()
+            if not keyword:
+                continue
+            has_condition = True
+
+            columns = [c for c in self.SEARCH_COLUMNS.get(search_type, []) if c in df.columns]
+            if not columns:
+                mask &= False
+                continue
+
+            type_mask = pd.Series(False, index=df.index)
+            for col in columns:
+                type_mask |= df[col].apply(lambda v: keyword in normalize_text(v).lower())
+            mask &= type_mask
+
+        if not has_condition:
             return df.iloc[0:0]
-
-        mask = pd.Series(False, index=df.index)
-        for col in columns:
-            mask |= df[col].apply(lambda v: keyword in normalize_text(v).lower())
 
         return df[mask]
 
@@ -138,8 +153,11 @@ if __name__ == "__main__":
         "분류체계명(라틴)": ["Carnivora Felidae", "Carnivora Canidae"],
     })
     _svc = SpeciesMasterService()
-    assert list(_svc.search(_df, "학명", "tigris")["국명"]) == ["호랑이"]
-    assert list(_svc.search(_df, "국명", "여우")["학명"]) == ["Vulpes vulpes"]
-    assert len(_svc.search(_df, "분류군", "고양이과")) == 1
-    assert len(_svc.search(_df, "학명", "")) == 0
+    assert list(_svc.search(_df, {"학명": "tigris"})["국명"]) == ["호랑이"]
+    assert list(_svc.search(_df, {"국명": "여우"})["학명"]) == ["Vulpes vulpes"]
+    assert len(_svc.search(_df, {"분류군": "고양이과"})) == 1
+    assert len(_svc.search(_df, {"학명": ""})) == 0
+    # 상세 검색: 분류군 + 학명 AND 결합
+    assert list(_svc.search(_df, {"분류군": "식육목", "학명": "tigris"})["국명"]) == ["호랑이"]
+    assert len(_svc.search(_df, {"분류군": "식육목", "학명": "없는학명"})) == 0
     print("species_master_service search self-check OK")

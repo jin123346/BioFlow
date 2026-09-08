@@ -5,7 +5,6 @@ import pandas as pd
 from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -152,12 +151,14 @@ class SpeciesMasterTab(QWidget):
 
         search_layout = QHBoxLayout()
 
-        self.search_type_combo = QComboBox()
-        self.search_type_combo.addItems(["학명", "국명", "분류군"])
-
-        self.search_keyword_input = QLineEdit()
-        self.search_keyword_input.setPlaceholderText("검색어 입력")
-        self.search_keyword_input.returnPressed.connect(self.search_species)
+        self.search_inputs = {}
+        for search_type in ("학명", "국명", "분류군"):
+            search_layout.addWidget(QLabel(search_type))
+            field = QLineEdit()
+            field.setPlaceholderText(f"{search_type} 검색어 (비워두면 조건에서 제외)")
+            field.returnPressed.connect(self.search_species)
+            self.search_inputs[search_type] = field
+            search_layout.addWidget(field)
 
         self.search_button = QPushButton("검색")
         self.search_button.clicked.connect(self.search_species)
@@ -165,12 +166,13 @@ class SpeciesMasterTab(QWidget):
         self.search_export_button = QPushButton("엑셀로 다운로드")
         self.search_export_button.clicked.connect(self.export_search_result)
 
-        search_layout.addWidget(QLabel("검색 조건"))
-        search_layout.addWidget(self.search_type_combo)
-        search_layout.addWidget(self.search_keyword_input)
         search_layout.addWidget(self.search_button)
         search_layout.addWidget(self.search_export_button)
         layout.addLayout(search_layout)
+
+        hint_label = QLabel("여러 칸을 같이 채우면 AND 조건으로 함께 검색됩니다 (예: 분류군 + 학명).")
+        hint_label.setStyleSheet("color: #5a6070; font-size: 11px;")
+        layout.addWidget(hint_label)
 
         self.search_result_label = QLabel("검색 결과가 여기에 표시됩니다.")
         layout.addWidget(self.search_result_label)
@@ -187,14 +189,13 @@ class SpeciesMasterTab(QWidget):
             self.search_result_label.setText("종정보 마스터가 로드되지 않았습니다.")
             return
 
-        search_type = self.search_type_combo.currentText()
-        keyword = self.search_keyword_input.text().strip()
+        filters = {search_type: field.text().strip() for search_type, field in self.search_inputs.items()}
 
-        if not keyword:
-            self.search_result_label.setText("검색어를 입력해 주세요.")
+        if not any(filters.values()):
+            self.search_result_label.setText("검색어를 하나 이상 입력해 주세요.")
             return
 
-        result_df = self.master_service.search(self.df, search_type, keyword)
+        result_df = self.master_service.search(self.df, filters)
         self.df_search_result = result_df
         populate_table_widget(self.search_result_table, result_df.head(200))
         self.search_result_label.setText(f"검색 결과 : {len(result_df)}건 (최대 200건 표시)")
