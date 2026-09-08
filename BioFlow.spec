@@ -6,8 +6,23 @@
 # data/ 폴더는 exe에 번들되어 최초 실행 시 내 문서\BioFlow\data로 시드 복사됨
 # (config/paths.py의 ensure_data_seeded 참고). 이후 실행부터는 그쪽만 읽고 씀.
 
+import json
+from pathlib import Path
+
 with open("VERSION", encoding="utf-8") as _f:
     APP_VERSION = _f.read().strip()
+
+# 빌드 = 릴리즈 기준이라, 앱 자체 업데이트 알림용 app_version.json도 VERSION에 맞춰 같이
+# 갱신함 (services/data_update_service.py의 check_for_app_update가 이 파일을 원격에서
+# 읽어 새 버전 알림을 띄움 -> 두 파일을 따로 손으로 맞출 필요 없게).
+_app_version_path = Path("app_version.json")
+try:
+    _app_version_data = json.loads(_app_version_path.read_text(encoding="utf-8"))
+except Exception:
+    _app_version_data = {}
+_app_version_data["version"] = APP_VERSION
+_app_version_data.setdefault("download_url", "https://github.com/jin123346/BioFlow/releases/latest")
+_app_version_path.write_text(json.dumps(_app_version_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 a = Analysis(
     ['app.py'],
