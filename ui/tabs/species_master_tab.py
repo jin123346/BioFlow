@@ -5,6 +5,7 @@ import pandas as pd
 from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -26,6 +28,21 @@ from services.species_compare_service import SpeciesCompareService
 from utils.excel_utils import find_target_sheet_name
 from utils.text_utils import normalize_text
 from config.constants import TARGET_SHEET_NAME
+
+
+def populate_table_widget(table: QTableWidget, df: pd.DataFrame):
+    table.clear()
+    table.setRowCount(len(df))
+    table.setColumnCount(len(df.columns))
+    table.setHorizontalHeaderLabels([str(col) for col in df.columns])
+
+    for row_idx in range(len(df)):
+        for col_idx in range(len(df.columns)):
+            value = df.iloc[row_idx, col_idx]
+            display_value = "" if pd.isna(value) else str(value)
+            table.setItem(row_idx, col_idx, QTableWidgetItem(display_value))
+
+    table.resizeColumnsToContents()
 
 
 class SpeciesMasterTab(QWidget):
@@ -55,6 +72,17 @@ class SpeciesMasterTab(QWidget):
         self.version_info_label.setStyleSheet("color: #555;")
         main_layout.addWidget(self.version_info_label)
         self.refresh_version_info_label()
+
+        self.sub_tabs = QTabWidget()
+        main_layout.addWidget(self.sub_tabs)
+
+        self.sub_tabs.addTab(self._build_manage_tab(), "마스터 관리")
+        self.sub_tabs.addTab(self._build_search_tab(), "종 검색")
+
+    def _build_manage_tab(self) -> QWidget:
+        manage_widget = QWidget()
+        main_layout = QVBoxLayout()
+        manage_widget.setLayout(main_layout)
 
         file_layout = QHBoxLayout()
 
@@ -115,6 +143,88 @@ class SpeciesMasterTab(QWidget):
         self.log_text.setPlaceholderText("작업 로그가 여기에 표시됩니다.")
         main_layout.addWidget(self.log_text)
 
+        return manage_widget
+
+    def _build_search_tab(self) -> QWidget:
+        search_widget = QWidget()
+        layout = QVBoxLayout()
+        search_widget.setLayout(layout)
+
+        search_layout = QHBoxLayout()
+
+        self.search_type_combo = QComboBox()
+        self.search_type_combo.addItems(["학명", "국명", "분류군"])
+
+        self.search_keyword_input = QLineEdit()
+        self.search_keyword_input.setPlaceholderText("검색어 입력")
+        self.search_keyword_input.returnPressed.connect(self.search_species)
+
+        self.search_button = QPushButton("검색")
+        self.search_button.clicked.connect(self.search_species)
+
+        self.search_export_button = QPushButton("엑셀로 다운로드")
+        self.search_export_button.clicked.connect(self.export_search_result)
+
+        search_layout.addWidget(QLabel("검색 조건"))
+        search_layout.addWidget(self.search_type_combo)
+        search_layout.addWidget(self.search_keyword_input)
+        search_layout.addWidget(self.search_button)
+        search_layout.addWidget(self.search_export_button)
+        layout.addLayout(search_layout)
+
+        self.search_result_label = QLabel("검색 결과가 여기에 표시됩니다.")
+        layout.addWidget(self.search_result_label)
+
+        self.search_result_table = QTableWidget()
+        layout.addWidget(self.search_result_table)
+
+        self.df_search_result = None
+
+        return search_widget
+
+    def search_species(self):
+        if self.df is None:
+            self.search_result_label.setText("종정보 마스터가 로드되지 않았습니다.")
+            return
+
+        search_type = self.search_type_combo.currentText()
+        keyword = self.search_keyword_input.text().strip()
+
+        if not keyword:
+            self.search_result_label.setText("검색어를 입력해 주세요.")
+            return
+
+        result_df = self.master_service.search(self.df, search_type, keyword)
+        self.df_search_result = result_df
+        populate_table_widget(self.search_result_table, result_df.head(200))
+        self.search_result_label.setText(f"검색 결과 : {len(result_df)}건 (최대 200건 표시)")
+
+    def export_search_result(self):
+        if self.df_search_result is None or self.df_search_result.empty:
+            self.search_result_label.setText("다운로드할 검색 결과가 없습니다. 먼저 검색을 실행해 주세요.")
+            return
+
+        from datetime import datetime
+
+        default_name = f"species_search_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "검색 결과 저장",
+            default_name,
+            "Excel Files (*.xlsx)"
+        )
+
+        if not file_path:
+            self.search_result_label.setText("검색 결과 다운로드가 취소되었습니다.")
+            return
+
+        try:
+            self.df_search_result.to_excel(file_path, index=False)
+            self.search_result_label.setText(f"검색 결과 다운로드 완료 : {file_path}")
+        except Exception as e:
+            self.search_result_label.setText(f"검색 결과 다운로드 실패 : {str(e)}")
+
     def append_log(self, message: str):
         self.log_text.append(message)
 
@@ -153,21 +263,7 @@ class SpeciesMasterTab(QWidget):
             self.append_log(f"엑셀 로드 실패 : {str(e)}")
 
     def show_dataframe_preview(self, df: pd.DataFrame):
-        preview_df = df.head(20)
-
-        self.preview_table.clear()
-        self.preview_table.setRowCount(len(preview_df))
-        self.preview_table.setColumnCount(len(preview_df.columns))
-        self.preview_table.setHorizontalHeaderLabels([str(col) for col in preview_df.columns])
-
-        for row_idx in range(len(preview_df)):
-            for col_idx in range(len(preview_df.columns)):
-                value = preview_df.iloc[row_idx, col_idx]
-                display_value = "" if pd.isna(value) else str(value)
-                item = QTableWidgetItem(display_value)
-                self.preview_table.setItem(row_idx, col_idx, item)
-
-        self.preview_table.resizeColumnsToContents()
+        populate_table_widget(self.preview_table, df.head(20))
         self.append_log("미리보기 테이블 표시 완료(상위 20행)")
 
     def save_master_to_local(self):
@@ -294,20 +390,7 @@ class SpeciesMasterTab(QWidget):
         self.show_dataframe_preview(self.df_candidates)
 
     def show_result_preview(self, df: pd.DataFrame):
-        self.result_table.clear()
-        self.result_table.setRowCount(len(df))
-        self.result_table.setColumnCount(len(df.columns))
-        self.result_table.setHorizontalHeaderLabels([str(col) for col in df.columns])
-
-        for row_idx in range(len(df)):
-            for col_idx in range(len(df.columns)):
-                value = df.iloc[row_idx, col_idx]
-                display_value = "" if pd.isna(value) else str(value)
-
-                item = QTableWidgetItem(display_value)
-                self.result_table.setItem(row_idx, col_idx, item)
-
-        self.result_table.resizeColumnsToContents()
+        populate_table_widget(self.result_table, df)
         self.append_log("비교 결과 테이블 표시 완료")
 
     def save_compare_result_to_excel(self):
