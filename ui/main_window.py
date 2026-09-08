@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QStackedWidget,
     QTableWidget, QTableWidgetItem, QMessageBox, QVBoxLayout, QWidget,
 )
+from ui.tabs.dashboard_tab import DashboardTab
 from ui.tabs.species_master_tab import SpeciesMasterTab
 from ui.tabs.species_review_tab import SpeciesReviewTab
 from ui.tabs.upload_tab import UploadTab
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         root_layout.addWidget(self.pages, 1)
 
+        self.dashboard_tab = DashboardTab()
         self.master_tab = SpeciesMasterTab()
         self.upload_tab = UploadTab()
         self.species_review_tab = SpeciesReviewTab(self.upload_tab)
@@ -67,6 +69,7 @@ class MainWindow(QMainWindow):
         self.gbif_tab = GbifTab()
 
         for page, label in [
+            (self.dashboard_tab, "대시보드"),
             (self.master_tab, "종정보 마스터"),
             (self.upload_tab, "신규 데이터"),
             (self.species_review_tab, "신규/업데이트 종 정리"),

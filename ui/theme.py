@@ -120,6 +120,24 @@ QScrollBar::add-line, QScrollBar::sub-line {
     height: 0px;
 }
 
+QGroupBox {
+    background: #ffffff;
+    border: 1px solid #d8dde5;
+    border-radius: 10px;
+    margin-top: 16px;
+    padding: 16px 14px 14px 14px;
+    font-weight: 700;
+    font-size: 14px;
+    color: #17203a;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 14px;
+    padding: 0 6px;
+    color: #1f8f5f;
+}
+
 /* App sidebar navigation */
 #Sidebar {
     background: #17203a;
