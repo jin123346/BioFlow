@@ -1,6 +1,5 @@
 import json
 import logging
-import shutil
 import tempfile
 import time
 import urllib.request
@@ -15,7 +14,7 @@ logger = logging.getLogger("bioflow.data_update")
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/jin123346/BioFlow/main"
 REMOTE_VERSION_URL = f"{GITHUB_RAW_BASE}/data/version.json"
 REMOTE_MASTER_URL = f"{GITHUB_RAW_BASE}/data/master/species_master.xlsx"
-REMOTE_INSTITUTION_URL = f"{GITHUB_RAW_BASE}/data/institution/institution.json"
+REMOTE_ORGANIZATIONS_URL = f"{GITHUB_RAW_BASE}/data/reference/organizations.json"
 REMOTE_PROJECTS_URL = f"{GITHUB_RAW_BASE}/data/reference/upload_projects.json"
 # 앱(exe) 자체의 새 릴리즈 확인용. data/version.json(종정보 마스터 버전)과는 별개 파일.
 # 새 버전을 배포할 때 이 파일의 version/download_url을 같이 올려야 알림이 뜸.
@@ -97,7 +96,7 @@ def check_for_app_update(local_version: str) -> dict[str, Any] | None:
 
 
 def apply_update(remote_info: dict[str, Any]) -> None:
-    """원격 species_master.xlsx / institution.json을 내려받아 로컬에 반영하고,
+    """원격 species_master.xlsx / organizations.json을 내려받아 로컬에 그대로 덮어쓰고,
     사업 목록(upload_projects.json)은 사용자가 직접 추가했을 수 있어 덮어쓰지 않고 병합."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         master_tmp = Path(tmp_dir) / "species_master.xlsx"
@@ -106,11 +105,14 @@ def apply_update(remote_info: dict[str, Any]) -> None:
         df = service.load_excel_file(str(master_tmp))
         service.save_master_to_local(df, str(master_tmp))
 
-        institution_tmp = Path(tmp_dir) / "institution.json"
-        institution_tmp.write_bytes(_fetch_bytes(REMOTE_INSTITUTION_URL, timeout=15))
-        institution_dir = DATA_DIR / "institution"
-        institution_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(institution_tmp, institution_dir / "institution.json")
+        try:
+            organizations_bytes = _fetch_bytes(REMOTE_ORGANIZATIONS_URL, timeout=15)
+            organizations_file = DATA_DIR / "reference" / "organizations.json"
+            organizations_file.parent.mkdir(parents=True, exist_ok=True)
+            organizations_file.write_bytes(organizations_bytes)
+        except Exception as exc:
+            # 기관 목록도 부가 항목이라 실패해도 마스터 업데이트 자체는 그대로 성공 처리
+            logger.info("apply_update: 기관 목록 업데이트 건너뜀 - %s", exc)
 
         try:
             remote_projects = json.loads(_fetch_bytes(REMOTE_PROJECTS_URL, timeout=15).decode("utf-8"))

@@ -59,6 +59,7 @@ data/institution/*
 !data/reference/
 data/reference/*
 !data/reference/upload_projects.json
+!data/reference/organizations.json
 output/
 temp/
 cache/
