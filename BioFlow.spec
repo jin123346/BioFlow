@@ -33,7 +33,10 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PyQt5'],  # requirements.txt에 있지만 코드에서 실제로 쓰지 않음
+    # PyQt5: requirements.txt에 있지만 코드에서 실제로 쓰지 않음
+    # scipy/pyarrow: 코드에서 안 쓰는데 pandas 설치 환경에 있으면 훅이 같이 끌고 옴
+    # (둘이 unpacked 기준 150MB+ 차지) -> 제외해서 빌드 용량 줄임
+    excludes=['PyQt5', 'scipy', 'pyarrow'],
     noarchive=False,
     optimize=0,
 )

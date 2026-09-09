@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -173,7 +174,7 @@ FINAL_EXPORT_COLUMNS: list[tuple[str, str | None]] = [
 
 DROPDOWN_OPTIONS = {
     "미디어타입": ["정보", "이미지", "동영상", "사운드"],
-    "분류코드": ["IN", "PL", "BI", "PI", "MM"],
+    "분류코드": ["IN", "PL", "BI", "PI", "MM", "SP", "MR", "AR", "AM", "SW", "AG"],
     "성별": ["암컷", "수컷", "양성", "확인불가"],
     "연령": ["성체", "어린개체", "중간개체", "확인불가"],
     "원본여부": ["원본", "사본"],
@@ -297,7 +298,7 @@ SPECIMEN_ROW_COLUMNS = [
 # "액침,건조,..."로 잘려있어 임시 목록으로 채움. 콤보박스를 editable로 열어뒀으니
 # 실제 운영 목록이 정해지면 여기 리스트만 갱신하면 됨.
 SPECIMEN_DROPDOWN_OPTIONS = {
-    "분류코드": ["IN", "PL", "BI", "PI", "MM"],
+    "분류코드": ["IN", "PL", "BI", "PI", "MM", "SP", "MR", "AR", "AM", "SW", "AG"],
     "성별": ["암컷", "수컷", "양성", "확인불가"],
     "연령": ["성체", "어린개체", "중간개체", "확인불가"],
     "원본여부": ["원본", "사본"],
@@ -567,7 +568,7 @@ class ImagePreviewDialog(QDialog):
 
 
 class DataTableWidget(QTableWidget):
-    """Ctrl+V로 엑셀에서 복사한 여러 셀을 한 번에 붙여넣거나, 선택 영역 우측 하단
+    """Ctrl+C/Ctrl+V로 엑셀과 여러 셀을 탭/줄바꿈 텍스트로 주고받거나, 선택 영역 우측 하단
     모서리를 드래그해서 값을 위/아래로 복사(엑셀 채우기 핸들과 비슷하되 단순 복사만 지원)."""
 
     def __init__(self, *args, **kwargs):
@@ -582,7 +583,28 @@ class DataTableWidget(QTableWidget):
         if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_V and self.paste_requested:
             self.paste_requested()
             return
+        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_C:
+            self._copy_selection_to_clipboard()
+            return
         super().keyPressEvent(event)
+
+    def _copy_selection_to_clipboard(self):
+        selected = self.selectedIndexes()
+        if not selected:
+            return
+        rows = sorted({index.row() for index in selected})
+        cols = sorted({index.column() for index in selected})
+        lines = []
+        for row in rows:
+            cells = []
+            for col in cols:
+                item = self.item(row, col)
+                cells.append(item.text() if item else "")
+            lines.append("\t".join(cells))
+        # 끝에 줄바꿈을 하나 더 붙여둠 (엑셀 복사 형식과 동일) -> 안 붙이면 빈 셀 1개만 복사했을 때
+        # 클립보드 텍스트가 완전히 빈 문자열이 돼서, 붙여넣기 쪽의 "빈 줄 제거" 로직이 이걸 통째로
+        # "붙여넣을 내용 없음"으로 오인해 Ctrl+V가 조용히 아무 동작도 안 하던 문제가 있었음
+        QApplication.clipboard().setText("\n".join(lines) + "\n")
 
     def _fill_handle_rect(self) -> QRect | None:
         selected = self.selectedIndexes()
@@ -794,7 +816,9 @@ class UploadTab(QWidget):
 
         self.data_table = DataTableWidget(0, len(ROW_COLUMNS))
         self.data_table.setHorizontalHeaderLabels(ROW_COLUMNS)
-        self.data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # SelectRows였으면 클릭 시 항상 행 전체가 선택돼 세로(한 컬럼) 범위를 고를 수 없었음 ->
+        # Ctrl+C 복사/채우기 핸들이 가로(행)든 세로(컬럼)든 선택한 그대로 동작하도록 셀 단위로 변경
+        self.data_table.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.data_table.setEditTriggers(
             QAbstractItemView.DoubleClicked
             | QAbstractItemView.EditKeyPressed
@@ -869,7 +893,7 @@ class UploadTab(QWidget):
                 widget.addItems(DROPDOWN_OPTIONS[column_name])
                 if column_name in DROPDOWN_DEFAULTS:
                     widget.setCurrentText(DROPDOWN_DEFAULTS[column_name])
-                if column_name in {"대륙/해양 국문", "대륙/해양 영문"}:
+                if column_name in {"대륙/해양 국문", "대륙/해양 영문", "분류코드"}:
                     widget.setEditable(True)
                 widget.currentTextChanged.connect(self.refresh_generated_fields)
                 if column_name == "미디어타입":
@@ -961,7 +985,9 @@ class UploadTab(QWidget):
 
         path = Path(file_path_text)
         media_type = MEDIA_EXTENSION_TYPES.get(path.suffix.lower())
-        image_path = path if media_type == "이미지" else path.with_suffix(".jpg") if media_type == "동영상" else None
+        image_path = (
+            path if media_type == "이미지" else UploadTab.video_thumbnail_path(path) if media_type == "동영상" else None
+        )
 
         pixmap = QPixmap(str(image_path)) if image_path and image_path.exists() else None
         if pixmap and not pixmap.isNull():
@@ -1023,6 +1049,8 @@ class UploadTab(QWidget):
 
         new_form_button = QPushButton("새 입력")
         new_form_button.clicked.connect(self.clear_specimen_form)
+        import_folder_button = QPushButton("이미지 폴더 불러오기")
+        import_folder_button.clicked.connect(self.import_specimen_media_folder)
         update_row_button = QPushButton("선택 행 수정")
         update_row_button.clicked.connect(self.update_selected_specimen_data_row)
         delete_row_button = QPushButton("선택 행 삭제")
@@ -1034,6 +1062,7 @@ class UploadTab(QWidget):
         self.specimen_species_status_label = QLabel("")
 
         control_layout.addWidget(new_form_button)
+        control_layout.addWidget(import_folder_button)
         control_layout.addWidget(update_row_button)
         control_layout.addWidget(delete_row_button)
         control_layout.addWidget(lookup_species_button)
@@ -1078,7 +1107,7 @@ class UploadTab(QWidget):
 
         self.specimen_data_table = DataTableWidget(0, len(SPECIMEN_ROW_COLUMNS))
         self.specimen_data_table.setHorizontalHeaderLabels(SPECIMEN_ROW_COLUMNS)
-        self.specimen_data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.specimen_data_table.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.specimen_data_table.setEditTriggers(
             QAbstractItemView.DoubleClicked
             | QAbstractItemView.EditKeyPressed
@@ -1142,7 +1171,7 @@ class UploadTab(QWidget):
                 widget.addItems(SPECIMEN_DROPDOWN_OPTIONS[column_name])
                 if column_name in SPECIMEN_DROPDOWN_DEFAULTS:
                     widget.setCurrentText(SPECIMEN_DROPDOWN_DEFAULTS[column_name])
-                if column_name in {"대륙/해양 국문", "대륙/해양 영문", "채집시간", "표본제작형태"}:
+                if column_name in {"대륙/해양 국문", "대륙/해양 영문", "채집시간", "표본제작형태", "분류코드"}:
                     widget.setEditable(True)
                 widget.currentTextChanged.connect(self.refresh_specimen_generated_fields)
             else:
@@ -1336,6 +1365,56 @@ class UploadTab(QWidget):
 
         self.set_specimen_save_status("위도/경도 기반 주소를 조회했습니다. (OpenStreetMap Nominatim, 내용 확인 필요)")
 
+    def import_specimen_media_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "이미지 폴더 선택", "")
+        if not folder:
+            return
+
+        # 표본은 이미지 단일 등록만 지원 -> 폴더에 동영상/사운드가 섞여 있어도 이미지만 골라서 씀
+        image_files = [path for path, media_type in self.scan_media_folder(Path(folder)) if media_type == "이미지"]
+        if not image_files:
+            QMessageBox.information(self, "폴더 불러오기", "지원하는 이미지 파일을 찾지 못했습니다.")
+            return
+
+        progress = QProgressDialog("이미지 파일 정보를 읽는 중...", "취소", 0, len(image_files), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(300)
+
+        added_count = 0
+        self.specimen_autosave_suspended = True
+        try:
+            # 폼에 이전에 작성하던 국명/학명 등 내용이 남아있으면 새로 만드는 모든 행에
+            # 그대로 찍혀버리므로, 사업명/기관/분류코드만 남기고 비운 뒤 시작
+            self.clear_specimen_form()
+            for index, file_path in enumerate(image_files):
+                progress.setLabelText(f"{file_path.name} 처리 중... ({index + 1}/{len(image_files)})")
+                progress.setValue(index)
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    break
+
+                self.set_form_value("NO.", self.next_specimen_no_value(), self.specimen_form_widgets)
+                self.set_form_value("파일경로", str(file_path), self.specimen_form_widgets)
+                self.set_form_value("원본경로", str(file_path), self.specimen_form_widgets)
+                self.set_form_value("원본파일명", file_path.stem, self.specimen_form_widgets)
+                self.apply_location_from_specimen_media(file_path)
+                self.apply_date_from_specimen_media(file_path)
+                self.add_specimen_data_row(self.collect_specimen_form_values())
+                added_count += 1
+        finally:
+            self.specimen_autosave_suspended = False
+            progress.setValue(len(image_files))
+
+        self.autosave_specimen_draft()
+        cancel_note = "\n(취소되어 일부만 불러왔습니다.)" if added_count < len(image_files) else ""
+        QMessageBox.information(
+            self,
+            "폴더 불러오기",
+            f"{added_count}건의 이미지를 행으로 추가했습니다.{cancel_note}\n"
+            "각 행을 선택해 종명 등 나머지 정보를 입력한 뒤 '선택 행 수정'으로 저장해 주세요.",
+        )
+        self.set_specimen_save_status(f"폴더 불러오기 완료: {added_count}건 (나머지 정보 입력 필요)")
+
     def select_specimen_image_source_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "원본 이미지 선택", "", self.media_file_filter("이미지"))
         if not file_path:
@@ -1344,7 +1423,7 @@ class UploadTab(QWidget):
         self.set_form_value("파일경로", file_path, self.specimen_form_widgets)
         # 새로 고른 원본 파일 정보를 바로 기록 (저장 시 파일경로/파일명만 새 저장위치로 바뀜)
         self.set_form_value("원본경로", file_path, self.specimen_form_widgets)
-        self.set_form_value("원본파일명", Path(file_path).name, self.specimen_form_widgets)
+        self.set_form_value("원본파일명", Path(file_path).stem, self.specimen_form_widgets)
         self.apply_location_from_specimen_media(Path(file_path))
         self.apply_date_from_specimen_media(Path(file_path))
         self.schedule_specimen_autosave()
@@ -1379,9 +1458,9 @@ class UploadTab(QWidget):
             if not normalize_text(values.get("원본경로")):
                 # 최초 저장 시 1번만 기록 -> 재저장해도 진짜 원본 경로가 덮어써지지 않음
                 values["원본경로"] = str(source_path)
-                values["원본파일명"] = source_path.name
+                values["원본파일명"] = source_path.stem
                 self.set_form_value("원본경로", str(source_path), self.specimen_form_widgets)
-                self.set_form_value("원본파일명", source_path.name, self.specimen_form_widgets)
+                self.set_form_value("원본파일명", source_path.stem, self.specimen_form_widgets)
             values["파일경로"] = str(saved_path)
             values["파일명"] = saved_path.name
             self.set_form_value("파일경로", str(saved_path), self.specimen_form_widgets)
@@ -1406,7 +1485,7 @@ class UploadTab(QWidget):
         values = values.copy()
         if not normalize_text(values.get("원본경로")):
             values["원본경로"] = str(source_path)
-            values["원본파일명"] = source_path.name
+            values["원본파일명"] = source_path.stem
         values["파일경로"] = str(saved_path)
         values["파일명"] = saved_path.name
         latitude, longitude, _ = self.extract_location_from_media(saved_path, "이미지")
@@ -1631,7 +1710,9 @@ class UploadTab(QWidget):
         indexes = self.specimen_data_table.selectedIndexes()
         if not indexes:
             return None
-        return indexes[0].row()
+        # selectedIndexes()는 정렬 보장이 없어서(드래그 방향에 따라 순서가 달라짐)
+        # indexes[0]을 쓰면 셀 범위를 드래그로 선택했을 때 엉뚱한 행이 잡힘 -> 항상 맨 위 행으로
+        return min(index.row() for index in indexes)
 
     def add_specimen_data_row(self, values: dict[str, Any]):
         row = self.specimen_data_table.rowCount()
@@ -1662,10 +1743,15 @@ class UploadTab(QWidget):
             return
         rows = [line.split("\t") for line in lines]
 
-        row = self.current_specimen_data_row()
-        start_row = 0 if row is None else row
-        start_col = self.specimen_data_table.currentColumn()
-        start_col = 0 if start_col < 0 else start_col
+        # currentColumn()은 드래그로 범위를 선택했을 때 "마지막으로 지나간 셀"의 열이라
+        # 목적지 왼쪽 위가 아닐 수 있음 -> 선택 범위 중 가장 왼쪽 위 셀로 고정.
+        # 선택된 셀이 하나도 없으면 (0,0)으로 잘못 덮어쓰지 않도록 그냥 붙여넣기를 취소함
+        indexes = self.specimen_data_table.selectedIndexes()
+        if not indexes:
+            self.set_specimen_save_status("붙여넣기 취소: 붙여넣을 셀을 먼저 선택해 주세요.")
+            return
+        start_row = min(index.row() for index in indexes)
+        start_col = min(index.column() for index in indexes)
 
         was_blocked = self.specimen_data_table.blockSignals(True)
         try:
@@ -1680,6 +1766,23 @@ class UploadTab(QWidget):
                     self.specimen_data_table.setItem(target_row, target_col, QTableWidgetItem(value))
         finally:
             self.specimen_data_table.blockSignals(was_blocked)
+
+        # 붙여넣기 중엔 신호를 막아뒀으니, 현재 폼에 로드된 행이 이번에 붙여넣은 범위에
+        # 포함됐다면 국명->학명 자동조회/날짜 형식변환을 셀 직접 수정 때와 동일하게 적용
+        current_row = self.current_specimen_data_row()
+        if current_row is not None and start_row <= current_row < start_row + len(rows):
+            row_values = rows[current_row - start_row]
+            touched_columns = {
+                SPECIMEN_ROW_COLUMNS[start_col + offset]
+                for offset in range(len(row_values))
+                if start_col + offset < len(SPECIMEN_ROW_COLUMNS)
+            }
+            self.load_selected_specimen_row_to_form()
+            if "국명" in touched_columns:
+                self.fill_specimen_taxon_from_korean_name()
+            for date_field in DATE_FIELDS & touched_columns:
+                self.normalize_specimen_date_field(date_field)
+            self.write_specimen_data_row(current_row, self.collect_specimen_form_values())
 
         self.autosave_specimen_draft()
         self.set_specimen_save_status(f"붙여넣기 완료: {len(rows)}행")
@@ -2429,32 +2532,52 @@ class UploadTab(QWidget):
             QMessageBox.information(self, "폴더 불러오기", "지원하는 이미지/동영상/사운드 파일을 찾지 못했습니다.")
             return
 
+        progress = QProgressDialog("미디어 파일 정보를 읽는 중...", "취소", 0, len(media_files), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(300)
+
+        added_count = 0
         self.autosave_suspended = True
         try:
             # 폼에 이전에 작성하던 국명/학명 등 내용이 남아있으면 새로 만드는 모든 행에
             # 그대로 찍혀버리므로, 사업명/기관/분류코드/미디어타입만 남기고 비운 뒤 시작
             self.clear_form()
-            for file_path, media_type in media_files:
+            for index, (file_path, media_type) in enumerate(media_files):
+                progress.setLabelText(f"{file_path.name} 처리 중... ({index + 1}/{len(media_files)})")
+                progress.setValue(index)
+                # subprocess 호출로 화면이 멈춰 보이지 않도록 파일 사이사이 이벤트를 처리
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    break
+
                 self.set_form_value("미디어타입", media_type)
                 self.set_form_value("NO.", self.next_no_value())
                 self.set_form_value("파일경로", str(file_path))
                 self.set_form_value("원본경로", str(file_path))
-                self.set_form_value("원본파일명", file_path.name)
-                self.apply_location_from_media(file_path, media_type)
-                self.apply_duration_from_media(file_path, media_type)
-                self.apply_date_from_media(file_path, media_type)
+                self.set_form_value("원본파일명", file_path.stem)
+                # 동영상/사운드는 위치/재생시간/촬영일자가 모두 같은 ffprobe 출력에서 나오므로
+                # 파일당 세 번 부르는 대신 한 번만 불러 공유 (exiftool 기동 비용이 커서 체감 효과 큼)
+                ffprobe_format = (
+                    self.probe_ffprobe_format(file_path) if media_type in {"동영상", "사운드"} else None
+                )
+                self.apply_location_from_media(file_path, media_type, ffprobe_format)
+                self.apply_duration_from_media(file_path, media_type, ffprobe_format)
+                self.apply_date_from_media(file_path, media_type, ffprobe_format)
                 self.add_data_row(self.collect_form_values())
+                added_count += 1
         finally:
             self.autosave_suspended = False
+            progress.setValue(len(media_files))
 
         self.autosave_draft()
+        cancel_note = "\n(취소되어 일부만 불러왔습니다.)" if added_count < len(media_files) else ""
         QMessageBox.information(
             self,
             "폴더 불러오기",
-            f"{len(media_files)}건의 미디어를 행으로 추가했습니다.\n"
+            f"{added_count}건의 미디어를 행으로 추가했습니다.{cancel_note}\n"
             "각 행을 선택해 종명 등 나머지 정보를 입력한 뒤 '선택 행 수정'으로 저장해 주세요.",
         )
-        self.set_save_status(f"폴더 불러오기 완료: {len(media_files)}건 (나머지 정보 입력 필요)")
+        self.set_save_status(f"폴더 불러오기 완료: {added_count}건 (나머지 정보 입력 필요)")
 
     @staticmethod
     def scan_media_folder(folder: Path) -> list[tuple[Path, str]]:
@@ -2487,14 +2610,16 @@ class UploadTab(QWidget):
         self.set_form_value("파일경로", file_path)
         # 새로 고른 원본 파일 정보를 바로 기록 (저장 시 파일경로/파일명만 새 저장위치로 바뀜)
         self.set_form_value("원본경로", file_path)
-        self.set_form_value("원본파일명", source_path.name)
+        self.set_form_value("원본파일명", source_path.stem)
         self.apply_location_from_media(source_path, media_type)
         self.apply_duration_from_media(source_path, media_type)
         self.apply_date_from_media(source_path, media_type)
         self.schedule_autosave()
 
-    def apply_location_from_media(self, source_path: Path, media_type: str):
-        latitude, longitude, message = self.extract_location_from_media(source_path, media_type)
+    def apply_location_from_media(
+        self, source_path: Path, media_type: str, ffprobe_format: dict | None = None
+    ):
+        latitude, longitude, message = self.extract_location_from_media(source_path, media_type, ffprobe_format)
         if latitude is None or longitude is None:
             self.set_save_status(message)
             return
@@ -2503,11 +2628,13 @@ class UploadTab(QWidget):
         self.set_form_value("경도", f"{longitude:.7f}")
         self.set_save_status(f"미디어 위치정보 적용: 위도 {latitude:.7f}, 경도 {longitude:.7f}")
 
-    def apply_duration_from_media(self, source_path: Path, media_type: str):
+    def apply_duration_from_media(
+        self, source_path: Path, media_type: str, ffprobe_format: dict | None = None
+    ):
         duration_field = {"동영상": "동영상 재생시간", "사운드": "사운드 재생시간"}.get(media_type)
         if not duration_field:
             return
-        duration_text = self.extract_media_duration(source_path)
+        duration_text = self.extract_media_duration(source_path, ffprobe_format)
         if duration_text:
             self.set_form_value(duration_field, duration_text)
 
@@ -2530,17 +2657,23 @@ class UploadTab(QWidget):
             return json.loads(empty_json)
 
     @staticmethod
-    def extract_media_duration(file_path: Path) -> str:
+    def probe_ffprobe_format(file_path: Path) -> dict:
+        # 위치/재생시간/촬영일자가 모두 이 하나의 ffprobe 출력에서 나오므로, 호출부에서
+        # 한 번만 실행해 공유하면 파일당 ffprobe 프로세스 기동을 최대 3->1회로 줄일 수 있음.
         ffprobe = shutil.which("ffprobe")
         if not ffprobe:
-            return ""
+            return {}
         data = UploadTab.run_json_command(
             [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)],
             timeout=10,
             empty_json="{}",
         )
+        return data.get("format", {})
 
-        duration = UploadTab.to_float(data.get("format", {}).get("duration"))
+    @staticmethod
+    def extract_media_duration(file_path: Path, ffprobe_format: dict | None = None) -> str:
+        media_format = ffprobe_format if ffprobe_format is not None else UploadTab.probe_ffprobe_format(file_path)
+        duration = UploadTab.to_float(media_format.get("duration"))
         if duration is None:
             return ""
 
@@ -2551,18 +2684,18 @@ class UploadTab(QWidget):
             return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes}:{seconds:02d}"
 
-    def apply_date_from_media(self, source_path: Path, media_type: str):
-        date_text = self.extract_media_date(source_path, media_type)
+    def apply_date_from_media(self, source_path: Path, media_type: str, ffprobe_format: dict | None = None):
+        date_text = self.extract_media_date(source_path, media_type, ffprobe_format)
         if date_text:
             self.set_form_value("관찰일", date_text)
 
     @staticmethod
-    def extract_media_date(file_path: Path, media_type: str) -> str:
+    def extract_media_date(file_path: Path, media_type: str, ffprobe_format: dict | None = None) -> str:
         if media_type == "이미지":
             date_text = UploadTab.extract_image_date(file_path)
             if date_text:
                 return date_text
-        return UploadTab.extract_media_date_with_ffprobe(file_path)
+        return UploadTab.extract_media_date_with_ffprobe(file_path, ffprobe_format)
 
     @staticmethod
     def extract_image_date(file_path: Path) -> str:
@@ -2582,16 +2715,9 @@ class UploadTab(QWidget):
         return date_part.replace(":", "-")
 
     @staticmethod
-    def extract_media_date_with_ffprobe(file_path: Path) -> str:
-        ffprobe = shutil.which("ffprobe")
-        if not ffprobe:
-            return ""
-        data = UploadTab.run_json_command(
-            [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)],
-            timeout=10,
-            empty_json="{}",
-        )
-        creation_time = data.get("format", {}).get("tags", {}).get("creation_time")
+    def extract_media_date_with_ffprobe(file_path: Path, ffprobe_format: dict | None = None) -> str:
+        media_format = ffprobe_format if ffprobe_format is not None else UploadTab.probe_ffprobe_format(file_path)
+        creation_time = media_format.get("tags", {}).get("creation_time")
         if not creation_time:
             return ""
         return str(creation_time).split("T")[0]
@@ -2611,9 +2737,9 @@ class UploadTab(QWidget):
             if not normalize_text(values.get("원본경로")):
                 # 최초 저장 시 1번만 기록 -> 재저장해도 진짜 원본 경로가 덮어써지지 않음
                 values["원본경로"] = str(source_path)
-                values["원본파일명"] = source_path.name
+                values["원본파일명"] = source_path.stem
                 self.set_form_value("원본경로", str(source_path))
-                self.set_form_value("원본파일명", source_path.name)
+                self.set_form_value("원본파일명", source_path.stem)
             values["파일경로"] = str(saved_path)
             values["파일명"] = saved_path.name
             self.set_form_value("파일경로", str(saved_path))
@@ -2645,7 +2771,7 @@ class UploadTab(QWidget):
         values = values.copy()
         if not normalize_text(values.get("원본경로")):
             values["원본경로"] = str(source_path)
-            values["원본파일명"] = source_path.name
+            values["원본파일명"] = source_path.stem
         values["파일경로"] = str(saved_path)
         values["파일명"] = saved_path.name
         latitude, longitude, _ = self.extract_location_from_media(saved_path, values.get("미디어타입", ""))
@@ -2753,6 +2879,12 @@ class UploadTab(QWidget):
             return False
         return result.returncode == 0 and output_path.exists()
 
+    @staticmethod
+    def video_thumbnail_path(video_path: Path) -> Path:
+        # 동영상 파일과 같은 폴더에 .jpg를 바로 만들면 원본 미디어 사이에 캡처 이미지가
+        # 섞여 보임 -> 그 폴더 밑에 "썸네일" 하위 폴더를 만들어 거기에 모아둠
+        return video_path.parent / "썸네일" / f"{video_path.stem}.jpg"
+
     def generate_video_thumbnails(self):
         success, skipped, failed, total = self.capture_pending_video_thumbnails()
         if total == 0:
@@ -2765,8 +2897,8 @@ class UploadTab(QWidget):
         self.set_save_status(f"동영상 캡처 이미지 생성 완료: {success}건 생성 / {failed}건 실패")
 
     def capture_pending_video_thumbnails(self) -> tuple[int, int, int, int]:
-        # "작성 내용 저장"/"엑셀로 저장"에서 동영상 행을 저장할 때 같은 파일명(.jpg)으로
-        # 캡처본도 같이 남기기 위해 호출됨(silent). "동영상 캡처 이미지 생성" 버튼도 이걸 재사용.
+        # "작성 내용 저장"/"엑셀로 저장"에서 동영상 행을 저장할 때 캡처본도 같이 남기기
+        # 위해 호출됨(silent). "동영상 캡처 이미지 생성" 버튼도 이걸 재사용.
         media_column = ROW_COLUMNS.index("파일경로")
         type_column = ROW_COLUMNS.index("미디어타입")
 
@@ -2784,10 +2916,11 @@ class UploadTab(QWidget):
 
         success, skipped, failed = 0, 0, 0
         for video_path in video_paths:
-            thumbnail_path = video_path.with_suffix(".jpg")
+            thumbnail_path = self.video_thumbnail_path(video_path)
             if thumbnail_path.exists():
                 skipped += 1
                 continue
+            thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
             if self.capture_video_thumbnail(video_path, thumbnail_path):
                 success += 1
             else:
@@ -2819,7 +2952,9 @@ class UploadTab(QWidget):
             return "Audio Files (*.wav *.mp3 *.m4a *.aac *.flac);;All Files (*)"
         return "Media Files (*.jpg *.jpeg *.tif *.tiff *.heic *.png *.mp4 *.mov *.m4v *.wav *.mp3 *.m4a);;All Files (*)"
 
-    def extract_location_from_media(self, file_path: Path, media_type: str) -> tuple[float | None, float | None, str]:
+    def extract_location_from_media(
+        self, file_path: Path, media_type: str, ffprobe_format: dict | None = None
+    ) -> tuple[float | None, float | None, str]:
         if media_type == "이미지":
             latitude, longitude = self.extract_image_gps(file_path)
             if latitude is not None and longitude is not None:
@@ -2829,7 +2964,7 @@ class UploadTab(QWidget):
         if latitude is not None and longitude is not None:
             return latitude, longitude, "미디어 메타데이터 위치정보를 적용했습니다."
 
-        latitude, longitude = self.extract_location_with_ffprobe(file_path)
+        latitude, longitude = self.extract_location_with_ffprobe(file_path, ffprobe_format)
         if latitude is not None and longitude is not None:
             return latitude, longitude, "동영상 메타데이터 위치정보를 적용했습니다."
 
@@ -2883,17 +3018,11 @@ class UploadTab(QWidget):
         return UploadTab.to_float(item.get("GPSLatitude")), UploadTab.to_float(item.get("GPSLongitude"))
 
     @staticmethod
-    def extract_location_with_ffprobe(file_path: Path) -> tuple[float | None, float | None]:
-        ffprobe = shutil.which("ffprobe")
-        if not ffprobe:
-            return None, None
-        data = UploadTab.run_json_command(
-            [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)],
-            timeout=10,
-            empty_json="{}",
-        )
-
-        tags = data.get("format", {}).get("tags", {})
+    def extract_location_with_ffprobe(
+        file_path: Path, ffprobe_format: dict | None = None
+    ) -> tuple[float | None, float | None]:
+        media_format = ffprobe_format if ffprobe_format is not None else UploadTab.probe_ffprobe_format(file_path)
+        tags = media_format.get("tags", {})
         location = tags.get("location") or tags.get("com.apple.quicktime.location.ISO6709")
         if not location:
             return None, None
@@ -2929,7 +3058,9 @@ class UploadTab(QWidget):
         indexes = self.data_table.selectedIndexes()
         if not indexes:
             return None
-        return indexes[0].row()
+        # selectedIndexes()는 정렬 보장이 없어서(드래그 방향에 따라 순서가 달라짐)
+        # indexes[0]을 쓰면 셀 범위를 드래그로 선택했을 때 엉뚱한 행이 잡힘 -> 항상 맨 위 행으로
+        return min(index.row() for index in indexes)
 
     def paste_clipboard_into_table(self):
         text = QApplication.clipboard().text()
@@ -2943,10 +3074,15 @@ class UploadTab(QWidget):
             return
         rows = [line.split("\t") for line in lines]
 
-        row = self.current_data_row()
-        start_row = 0 if row is None else row
-        start_col = self.data_table.currentColumn()
-        start_col = 0 if start_col < 0 else start_col
+        # currentColumn()은 드래그로 범위를 선택했을 때 "마지막으로 지나간 셀"의 열이라
+        # 목적지 왼쪽 위가 아닐 수 있음 -> 선택 범위 중 가장 왼쪽 위 셀로 고정.
+        # 선택된 셀이 하나도 없으면 (0,0)으로 잘못 덮어쓰지 않도록 그냥 붙여넣기를 취소함
+        indexes = self.data_table.selectedIndexes()
+        if not indexes:
+            self.set_save_status("붙여넣기 취소: 붙여넣을 셀을 먼저 선택해 주세요.")
+            return
+        start_row = min(index.row() for index in indexes)
+        start_col = min(index.column() for index in indexes)
 
         was_blocked = self.data_table.blockSignals(True)
         try:
@@ -2961,6 +3097,23 @@ class UploadTab(QWidget):
                     self.data_table.setItem(target_row, target_col, QTableWidgetItem(value))
         finally:
             self.data_table.blockSignals(was_blocked)
+
+        # 붙여넣기 중엔 신호를 막아뒀으니, 현재 폼에 로드된 행이 이번에 붙여넣은 범위에
+        # 포함됐다면 국명->학명 자동조회/날짜 형식변환을 셀 직접 수정 때와 동일하게 적용
+        current_row = self.current_data_row()
+        if current_row is not None and start_row <= current_row < start_row + len(rows):
+            row_values = rows[current_row - start_row]
+            touched_columns = {
+                ROW_COLUMNS[start_col + offset]
+                for offset in range(len(row_values))
+                if start_col + offset < len(ROW_COLUMNS)
+            }
+            self.load_selected_row_to_form()
+            if "국명" in touched_columns:
+                self.fill_species_from_korean_name()
+            for date_field in DATE_FIELDS & touched_columns:
+                self.normalize_date_field(date_field)
+            self.write_data_row(current_row, self.collect_form_values())
 
         self.autosave_draft()
         self.set_save_status(f"붙여넣기 완료: {len(rows)}행")
