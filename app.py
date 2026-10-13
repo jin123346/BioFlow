@@ -1,15 +1,57 @@
 import logging
 import sys
 
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMessageBox #PySide6 앱 실행 객체
 from config.paths import LOG_DIR, ensure_data_seeded, get_app_version
 from services.data_update_service import apply_update, check_for_app_update, check_for_update
+from services.data_update_service import check_for_classification_update, apply_classification_update
 from ui.main_window import MainWindow #메인 창 클래스
 from ui.theme import STYLE_SHEET, install_scroll_wheel_guard
 
 LOG_FILE = LOG_DIR / "app.log"
+
+
+class UpdateCheckWorker(QThread):
+    checked = Signal(object, object, object)
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = window
+        self.checked.connect(self.show_results)
+
+    @Slot(object, object, object)
+    def show_results(self, data, release, classification):
+        if self.window.isVisible():
+            show_update_results(self.window, data, release, classification)
+
+    def run(self):
+        self.checked.emit(check_for_update(), check_for_app_update(get_app_version()), check_for_classification_update())
+
+
+def start_update_checks(window):
+    worker = UpdateCheckWorker(window)
+    window.update_check_worker = worker
+    worker.start()
+
+
+def show_update_results(window, data, release, classification=None):
+    if data:
+        check_for_data_update(window, data)
+    if release:
+        check_for_app_release(window, release)
+    if classification:
+        reply = QMessageBox.question(window, "분류군 기준자료 업데이트", f"분류군 기준자료 새 버전 {classification['version']}이 있습니다.\n업데이트할까요?")
+        if reply == QMessageBox.Yes:
+            try:
+                apply_classification_update(classification)
+                review = getattr(window, "_loaded_pages", {}).get(3)
+                if review is not None:
+                    review.refresh_reference_label()
+                QMessageBox.information(window, "분류군 업데이트 완료", "새 분류군 기준자료를 적용했습니다.")
+            except Exception as exc:
+                QMessageBox.warning(window, "분류군 업데이트 실패", str(exc))
 
 
 def install_error_logging():
@@ -48,16 +90,14 @@ def main():
         pass
 
     # 창이 뜬 뒤 잠깐 있다가 기준 데이터(종정보 마스터/기관 정보) 새 버전이 있는지 확인
-    QTimer.singleShot(1500, lambda: check_for_data_update(window))
-    # 앱(exe) 자체의 새 릴리즈가 있는지도 별도로 확인 (데이터 업데이트와 독립적)
-    QTimer.singleShot(2000, lambda: check_for_app_release(window))
+    QTimer.singleShot(1500, lambda: start_update_checks(window))
+    app.aboutToQuit.connect(lambda: window.update_check_worker.wait() if hasattr(window, "update_check_worker") else None)
 
     #이벤트 루프 실행, 버튼 클릭, 창 이동 같은 GUI 동작을 계속 기다림
     sys.exit(app.exec())
 
 
-def check_for_data_update(window):
-    remote_info = check_for_update()
+def check_for_data_update(window, remote_info=None):
     if not remote_info:
         return
     reply = QMessageBox.question(
@@ -75,8 +115,7 @@ def check_for_data_update(window):
         QMessageBox.warning(window, "업데이트 실패", f"업데이트 중 문제가 발생했습니다: {exc}")
 
 
-def check_for_app_release(window):
-    remote_info = check_for_app_update(get_app_version())
+def check_for_app_release(window, remote_info=None):
     if not remote_info:
         return
     reply = QMessageBox.question(

@@ -44,7 +44,14 @@ _SEED_EXCLUDE_NAMES = {"new_data_draft.json", "new_specimen_draft.json"}
 
 def ensure_data_seeded():
     """최초 실행(내 문서\\BioFlow\\data가 아직 없음)이면 exe에 번들된 data/를 복사해둠."""
-    if not FROZEN or DATA_DIR.exists() or not BUNDLED_DATA_DIR.exists():
+    if not FROZEN or not BUNDLED_DATA_DIR.exists():
+        return
+    if DATA_DIR.exists():
+        # Existing installs retain their data while receiving a newly added reference.
+        source = BUNDLED_DATA_DIR / "classification"
+        target = DATA_DIR / "classification"
+        if source.exists() and not target.exists():
+            shutil.copytree(source, target)
         return
 
     def _skip_drafts(_src_dir: str, names: list[str]) -> set[str]:

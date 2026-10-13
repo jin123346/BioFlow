@@ -1,11 +1,14 @@
 import difflib
+import json
+import logging
 
 import pandas as pd
 
-from config.paths import DATA_DIR
+from config.paths import CACHE_DIR, DATA_DIR
 from utils.text_utils import normalize_text
 
 ADDRESS_FILE = DATA_DIR / "address" / "영문주소_정리.xlsx"
+ADDRESS_CACHE_FILE = CACHE_DIR / "address_lookup.json"
 
 # level -> [(시트명, 국문 컬럼, 영문 컬럼), ...] — 여러 시트를 한 레벨로 풀링
 LEVEL_SHEETS: dict[str, list[tuple[str, str, str]]] = {
@@ -31,9 +34,24 @@ class AddressMasterService:
     def _ensure_loaded(self):
         if self._loaded:
             return
-        self._loaded = True
         if not ADDRESS_FILE.exists():
+            self._loaded = True
             return
+        stat = ADDRESS_FILE.stat()
+        fingerprint = [stat.st_mtime_ns, stat.st_size]
+        try:
+            cached = json.loads(ADDRESS_CACHE_FILE.read_text(encoding="utf-8"))
+            lookup = cached["lookup"]
+            if cached.get("version") == 1 and cached.get("source") == fingerprint and all(
+                isinstance(lookup.get(level), dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in lookup[level].items())
+                for level in LEVEL_SHEETS
+            ):
+                self._lookup = lookup
+                self._names = {level: list(values) for level, values in lookup.items()}
+                self._loaded = True
+                return
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
         try:
             excel_file = pd.ExcelFile(ADDRESS_FILE)
         except Exception:
@@ -45,13 +63,22 @@ class AddressMasterService:
                 if sheet_name not in excel_file.sheet_names:
                     continue
                 df = excel_file.parse(sheet_name)
-                for _, row in df.iterrows():
+                for row in df.to_dict("records"):
                     korean = normalize_text(row.get(kr_col))
                     english = normalize_text(row.get(en_col))
                     if korean and english and korean not in lookup:
                         lookup[korean] = english
             self._lookup[level] = lookup
             self._names[level] = list(lookup.keys())
+        excel_file.close()
+        self._loaded = True
+        try:
+            ADDRESS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            temporary = ADDRESS_CACHE_FILE.with_suffix(".tmp")
+            temporary.write_text(json.dumps({"version": 1, "source": fingerprint, "lookup": self._lookup}, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(ADDRESS_CACHE_FILE)
+        except OSError:
+            logging.getLogger(__name__).warning("Could not cache address lookup", exc_info=True)
 
     def candidates(self, level: str) -> list[str]:
         """자동완성용 해당 레벨의 국문 후보 전체 목록."""

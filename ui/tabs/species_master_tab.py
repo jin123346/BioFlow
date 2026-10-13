@@ -5,7 +5,6 @@ import pandas as pd
 from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import (
     QApplication,
-    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from config.paths import LOCAL_VERSION_FILE_PATH, MASTER_FILE_PATH
 from services.data_update_service import LOCAL_VERSION_FILE
+from ui.widgets.recent_file_dialog import RecentFileDialog as QFileDialog
 from services.species_master_service import SpeciesMasterService
 from services.species_compare_service import SpeciesCompareService
 from utils.excel_utils import find_target_sheet_name

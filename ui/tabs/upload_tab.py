@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import itertools
 import json
 import logging
 import re
@@ -8,31 +10,34 @@ import subprocess
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+import zipfile
 
 import pandas as pd
-from PySide6.QtCore import QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QCursor, QPixmap
+from PySide6.QtCore import QRect, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QBrush, QColor, QCursor, QDesktopServices, QPixmap
 
 logger = logging.getLogger("bioflow.upload_tab")
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
+    QCheckBox,
     QCompleter,
     QDialog,
-    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
     QProgressDialog,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -45,7 +50,12 @@ from PySide6.QtWidgets import (
 
 from config.paths import DATA_DIR
 from services.address_master_service import AddressMasterService
+from ui.widgets.recent_file_dialog import RecentFileDialog as QFileDialog
 from services.species_master_service import SpeciesMasterService
+from services.map_preview_service import publish_map_preview
+from services.final_excel_service import write_final_template
+from ui.widgets.column_mapping_dialog import ColumnMappingDialog, apply_mapping, auto_map
+from ui.widgets.batch_apply_dialog import BatchApplyDialog
 from utils.text_utils import normalize_text
 
 try:
@@ -55,10 +65,51 @@ except ImportError:
     Image = None
 
 
+def open_excel_lenient(file_path):
+    """한셀/WPS 등이 저장한 xlsx는 이름 없는 셀 스타일이 있어 openpyxl이 거부함 → styles.xml에 이름을 채워 재시도."""
+    try:
+        return pd.ExcelFile(file_path)
+    except TypeError as exc:
+        if "_NamedCellStyle" not in str(exc):
+            raise
+    counter = itertools.count()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(file_path) as src, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            data = src.read(item)
+            if item.filename == "xl/styles.xml":
+                # <cellStyle> 또는 <x:cellStyle> 처럼 네임스페이스 접두사가 붙은 경우 모두 처리
+                data = re.sub(
+                    rb"<((?:\w+:)?cellStyle)(?=[\s/>])(?![^>]*\bname=)",
+                    lambda m: b'<%s name="Unnamed%d"' % (m.group(1), next(counter)),
+                    data,
+                )
+            dst.writestr(item, data)
+    buf.seek(0)
+    return pd.ExcelFile(buf)
+
+
+def read_excel_lenient(file_path, sheet_name=0):
+    with open_excel_lenient(file_path) as workbook:
+        return parse_excel_sheet(workbook, sheet_name)
+
+
+def parse_excel_sheet(workbook, sheet_name):
+    name = workbook.sheet_names[sheet_name] if isinstance(sheet_name, int) else sheet_name
+    sheet = workbook.book[name]
+    first = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+    second = [cell.value for cell in next(sheet.iter_rows(min_row=2, max_row=2))]
+    header_row = 1 if "종고유ID" not in first and "종고유ID" in second and "학명" in second else 0
+    frame = workbook.parse(sheet_name=sheet_name, header=header_row)
+    frame.attrs["excel_epoch"] = workbook.book.epoch
+    return frame
+
+
 REFERENCE_DIR = DATA_DIR / "reference"
 PROJECTS_FILE = REFERENCE_DIR / "upload_projects.json"
 ORGANIZATIONS_FILE = REFERENCE_DIR / "organizations.json"
 DRAFT_FILE = REFERENCE_DIR / "new_data_draft.json"
+COLUMN_MAPPINGS_FILE = REFERENCE_DIR / "excel_column_mappings.json"
 
 ROW_COLUMNS = [
     "NO.",
@@ -204,6 +255,11 @@ TEXT_DEFAULTS = {
 }
 
 DATE_FIELDS = {"동정년월일", "관찰일", "채집년월일"}
+
+# 위도/경도 오류 표시용 배경색, 대한민국 대략 범위(위도/경도 뒤바뀜, 국외 여부 판단용)
+LOCATION_ERROR_COLOR = QColor("#ffcdd2")
+KOREA_LAT_RANGE = (33.0, 39.0)
+KOREA_LON_RANGE = (124.0, 132.0)
 
 # 사업/기관/미디어타입/분류코드는 여러 행을 연달아 입력할 때 세션 내내 유지되는 값
 STICKY_FIELDS = {"사업명", "사업년도", "순번", "기관명", "기관코드", "미디어타입", "분류코드"}
@@ -721,9 +777,7 @@ class UploadTab(QWidget):
         self.specimen_autosave_timer.setSingleShot(True)
         self.specimen_autosave_timer.timeout.connect(self.autosave_specimen_draft)
         self.specimen_autosave_suspended = False
-        self.excel_file_path = ""
         self.media_storage_dir = ""
-        self.specimen_excel_file_path = ""
         self.specimen_media_storage_dir = ""
 
         self._ensure_reference_files()
@@ -739,6 +793,9 @@ class UploadTab(QWidget):
 
         title_label = QLabel("신규 데이터 직접 작성")
         main_layout.addWidget(title_label)
+        self.preserve_database_numbers = QCheckBox("기존 데이터베이스번호 유지 (해제하면 새 번호 생성)")
+        self.preserve_database_numbers.setChecked(True)
+        main_layout.addWidget(self.preserve_database_numbers)
 
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
@@ -766,7 +823,10 @@ class UploadTab(QWidget):
         lookup_species_button.clicked.connect(self.fill_species_from_korean_name)
         lookup_address_button = QPushButton("위도/경도로 주소 조회")
         lookup_address_button.clicked.connect(self.fill_address_from_latlon)
+        map_button = QPushButton("이 행 위치 확인")
+        map_button.clicked.connect(self.open_location_on_map)
         self.species_status_label = QLabel("")
+        self.configure_status_label(self.species_status_label)
 
         control_layout.addWidget(new_form_button)
         control_layout.addWidget(import_folder_button)
@@ -774,9 +834,10 @@ class UploadTab(QWidget):
         control_layout.addWidget(delete_row_button)
         control_layout.addWidget(lookup_species_button)
         control_layout.addWidget(lookup_address_button)
-        control_layout.addWidget(self.species_status_label)
+        control_layout.addWidget(map_button)
         control_layout.addStretch()
         layout.addLayout(control_layout)
+        layout.addWidget(self.species_status_label)
 
         media_storage_layout = QHBoxLayout()
         self.media_storage_path_input = QLineEdit()
@@ -852,9 +913,16 @@ class UploadTab(QWidget):
         import_button.clicked.connect(self.load_rows_from_excel)
         thumbnail_button = QPushButton("동영상 캡처 이미지 생성")
         thumbnail_button.clicked.connect(self.generate_video_thumbnails)
+        address_all_button = QPushButton("위치 전체 주소 조회")
+        address_all_button.clicked.connect(self.fill_all_addresses_from_latlon)
+        species_project_all_button = QPushButton("종ID·사업·미디어 일괄 적용")
+        species_project_all_button.clicked.connect(self.fill_all_species_and_project)
+        map_all_button = QPushButton("전체 위치 지도 확인")
+        map_all_button.clicked.connect(self.open_all_locations_on_map)
         clear_button = QPushButton("작성 내용 비우기")
         clear_button.clicked.connect(self.clear_data_rows)
         self.save_status_label = QLabel("")
+        self.configure_status_label(self.save_status_label)
 
         save_layout.addStretch()
         save_layout.addWidget(save_draft_button)
@@ -862,11 +930,22 @@ class UploadTab(QWidget):
         save_layout.addWidget(export_button)
         save_layout.addWidget(import_button)
         save_layout.addWidget(thumbnail_button)
+        save_layout.addWidget(species_project_all_button)
+        save_layout.addWidget(address_all_button)
+        save_layout.addWidget(map_all_button)
         save_layout.addWidget(clear_button)
-        save_layout.addWidget(self.save_status_label)
         layout.addLayout(save_layout)
+        layout.addWidget(self.save_status_label)
         self.refresh_combos()
         return tab
+
+    @staticmethod
+    def configure_status_label(label: QLabel):
+        # Long paths/status messages must not increase the main window's minimum width.
+        label.setWordWrap(True)
+        label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        label.setFixedHeight(40)
+        label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
     def build_row_form(self):
         for column_name in ROW_COLUMNS:
@@ -1059,7 +1138,10 @@ class UploadTab(QWidget):
         lookup_species_button.clicked.connect(self.fill_specimen_taxon_from_korean_name)
         lookup_address_button = QPushButton("위도/경도로 주소 조회")
         lookup_address_button.clicked.connect(self.fill_specimen_address_from_latlon)
+        map_button = QPushButton("이 행 위치 확인")
+        map_button.clicked.connect(self.open_specimen_location_on_map)
         self.specimen_species_status_label = QLabel("")
+        self.configure_status_label(self.specimen_species_status_label)
 
         control_layout.addWidget(new_form_button)
         control_layout.addWidget(import_folder_button)
@@ -1067,9 +1149,10 @@ class UploadTab(QWidget):
         control_layout.addWidget(delete_row_button)
         control_layout.addWidget(lookup_species_button)
         control_layout.addWidget(lookup_address_button)
-        control_layout.addWidget(self.specimen_species_status_label)
+        control_layout.addWidget(map_button)
         control_layout.addStretch()
         layout.addLayout(control_layout)
+        layout.addWidget(self.specimen_species_status_label)
 
         media_storage_layout = QHBoxLayout()
         self.specimen_media_storage_path_input = QLineEdit()
@@ -1136,18 +1219,28 @@ class UploadTab(QWidget):
         export_button.clicked.connect(self.export_specimen_rows_to_excel)
         import_button = QPushButton("엑셀 불러오기")
         import_button.clicked.connect(self.load_specimen_rows_from_excel)
+        address_all_button = QPushButton("위치 전체 주소 조회")
+        address_all_button.clicked.connect(self.fill_all_specimen_addresses_from_latlon)
+        species_project_all_button = QPushButton("종ID·사업 일괄 적용")
+        species_project_all_button.clicked.connect(self.fill_all_specimen_species_and_project)
+        map_all_button = QPushButton("전체 위치 지도 확인")
+        map_all_button.clicked.connect(self.open_all_specimen_locations_on_map)
         clear_button = QPushButton("작성 내용 비우기")
         clear_button.clicked.connect(self.clear_specimen_data_rows)
         self.specimen_save_status_label = QLabel("")
+        self.configure_status_label(self.specimen_save_status_label)
 
         save_layout.addStretch()
         save_layout.addWidget(save_draft_button)
         save_layout.addWidget(load_draft_button)
         save_layout.addWidget(export_button)
         save_layout.addWidget(import_button)
+        save_layout.addWidget(species_project_all_button)
+        save_layout.addWidget(address_all_button)
+        save_layout.addWidget(map_all_button)
         save_layout.addWidget(clear_button)
-        save_layout.addWidget(self.specimen_save_status_label)
         layout.addLayout(save_layout)
+        layout.addWidget(self.specimen_save_status_label)
         self.refresh_combos()
         return tab
 
@@ -1245,6 +1338,8 @@ class UploadTab(QWidget):
         self.apply_organization_to_form(label, self.specimen_form_widgets, self.refresh_specimen_generated_fields)
 
     def refresh_specimen_generated_fields(self):
+        if self.restore_existing_database_number(True):
+            return
         organization_code = self.get_form_value("기관코드", self.specimen_form_widgets)
         taxon_code = self.get_form_value("분류코드", self.specimen_form_widgets)
         year = self.get_form_value("사업년도", self.specimen_form_widgets)
@@ -1329,6 +1424,246 @@ class UploadTab(QWidget):
         else:
             self.set_specimen_save_status(f"{korean_field} → {english_text} (유사 매칭, 확인 필요)")
 
+    def open_specimen_location_on_map(self):
+        self.open_location_on_map_for(
+            self.get_form_value("위도", self.specimen_form_widgets),
+            self.get_form_value("경도", self.specimen_form_widgets),
+        )
+
+    def open_location_on_map_for(self, latitude_text: str, longitude_text: str):
+        latitude = self.to_float(latitude_text)
+        longitude = self.to_float(longitude_text)
+        if latitude is None or longitude is None:
+            QMessageBox.warning(self, "지도 확인", "위도/경도를 먼저 입력해 주세요.")
+            return
+        # 지도 라이브러리를 앱에 내장하면 빌드 용량이 크게 늘어나서(QtWebEngine 150MB+),
+        # 기본 브라우저로 OpenStreetMap을 열어 좌표 위치에 핀을 찍어 보여주는 방식으로 처리
+        url = f"https://www.openstreetmap.org/?mlat={latitude}&mlon={longitude}#map=17/{latitude}/{longitude}"
+        QDesktopServices.openUrl(QUrl(url))
+
+    def open_all_specimen_locations_on_map(self):
+        self.open_all_locations_on_map_for(
+            self.specimen_data_table, SPECIMEN_ROW_COLUMNS, SPECIMEN_ADDRESS_FIELDS, "specimen_map_preview.html"
+        )
+
+    def open_all_locations_on_map_for(
+        self, table: QTableWidget, row_columns: list[str], address_fields: dict, file_name: str
+    ):
+        points = self.collect_map_points(table, row_columns, address_fields)
+        if not points:
+            QMessageBox.information(self, "지도 확인", "위도/경도가 입력된 행이 없습니다.")
+            return
+
+        try:
+            url = publish_map_preview(self.build_locations_map_html(points))
+            if not QDesktopServices.openUrl(QUrl(url)):
+                raise RuntimeError("기본 브라우저를 열 수 없습니다.")
+        except Exception as exc:
+            QMessageBox.warning(self, "지도 확인 실패", str(exc))
+            return
+        # 몇 개 행이 지도에 찍혔는지 바로 알 수 있게 표시 (위도/경도가 비어있는 행은
+        # 애초에 지도에 안 찍히므로, 핀이 하나만 보이면 그만큼만 좌표가 채워져 있다는 뜻)
+        QMessageBox.information(self, "지도 확인", f"위치가 입력된 {len(points)}개 행을 지도에 표시했습니다.")
+
+    @staticmethod
+    def collect_map_points(table: QTableWidget, row_columns: list[str], address_fields: dict) -> list[dict]:
+        lat_col = row_columns.index("위도")
+        lon_col = row_columns.index("경도")
+        no_col = row_columns.index("데이터베이스번호")
+        # 상세(detail)는 역지오코딩 결과에 없는 필드라 주소 표시에서 제외
+        address_cols = [
+            row_columns.index(korean_field) for korean_field, (_, key) in address_fields.items() if key != "detail"
+        ]
+
+        points = []
+        for row in range(table.rowCount()):
+            lat_item = table.item(row, lat_col)
+            lon_item = table.item(row, lon_col)
+            latitude = UploadTab.to_float(lat_item.text() if lat_item else "")
+            longitude = UploadTab.to_float(lon_item.text() if lon_item else "")
+            if latitude is None or longitude is None:
+                continue
+
+            no_item = table.item(row, no_col)
+            db_no = no_item.text() if no_item and no_item.text() else f"{row + 1}행"
+            address_parts = [table.item(row, col).text() for col in address_cols if table.item(row, col) and table.item(row, col).text()]
+            points.append(
+                {
+                    "no": db_no,
+                    "lat": latitude,
+                    "lon": longitude,
+                    "address": " ".join(address_parts) or "주소 없음",
+                }
+            )
+        return points
+
+    @staticmethod
+    def build_locations_map_html(points: list[dict]) -> str:
+        # </script> 시퀀스가 주소 텍스트에 섞여 들어와도 스크립트 태그가 깨지지 않게 이스케이프
+        points_json = json.dumps(points, ensure_ascii=False).replace("</", "<\\/")
+        return f"""<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>BioFlow 위치 확인</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+html, body, #map {{ height: 100%; margin: 0; }}
+#status {{ position: absolute; top: 12px; left: 60px; right: 12px;
+  z-index: 1000; padding: 10px; background: white; border-radius: 4px;
+  font: 14px sans-serif; }}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="status" role="status">지도를 불러오는 중입니다. 인터넷 연결이 필요합니다.</div>
+<script>
+  var status = document.getElementById('status');
+  if (typeof L === 'undefined') {{
+    status.textContent = '지도 프로그램을 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요.';
+  }} else {{
+  var points = {points_json};
+  var map = L.map('map', {{ maxZoom: 19 }});
+  var tiles = L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }});
+  var failedTiles = false;
+  tiles.on('loading', function () {{
+    failedTiles = false;
+    status.hidden = false;
+    status.textContent = '지도 배경을 불러오는 중입니다.';
+  }});
+  tiles.on('tileerror', function () {{
+    failedTiles = true;
+    status.hidden = false;
+    status.textContent = '일부 지도 배경을 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요.';
+  }});
+  tiles.on('load', function () {{ status.hidden = !failedTiles; }});
+  tiles.addTo(map);
+  function escapeHtml(value) {{
+    var element = document.createElement('span');
+    element.textContent = String(value);
+    return element.innerHTML;
+  }}
+  var markers = points.map(function (p) {{
+    return L.marker([p.lat, p.lon])
+      .bindPopup('<b>' + escapeHtml(p.no) + '</b><br>' + p.lat + ', ' + p.lon + '<br>' + escapeHtml(p.address))
+      .addTo(map);
+  }});
+  if (markers.length) {{
+    map.fitBounds(L.featureGroup(markers).getBounds().pad(0.2), {{ maxZoom: 17 }});
+  }} else {{
+    map.setView([36.5, 127.8], 7);
+  }}
+  }}
+</script>
+</body>
+</html>
+"""
+
+    def fill_all_specimen_addresses_from_latlon(self):
+        self.batch_fill_addresses(
+            self.specimen_data_table, SPECIMEN_ROW_COLUMNS, SPECIMEN_ADDRESS_FIELDS, self.set_specimen_save_status
+        )
+
+    def fill_all_specimen_species_and_project(self):
+        self.batch_fill_species_and_project(
+            self.specimen_data_table,
+            SPECIMEN_ROW_COLUMNS,
+            self.specimen_form_widgets,
+            self.set_specimen_save_status,
+            self.schedule_specimen_autosave,
+        )
+
+    def batch_fill_addresses(self, table: QTableWidget, row_columns: list[str], address_fields: dict, status_setter):
+        lat_col = row_columns.index("위도")
+        lon_col = row_columns.index("경도")
+        # 시도가 이미 채워진 행은 재조회하지 않음 (Nominatim 초당 1건 제한이라 전체를 다시
+        # 돌리면 오래 걸림 -> 비어있는 행만 대상으로)
+        sido_field = next(k for k, (_, key) in address_fields.items() if key == "sido")
+        sido_col = row_columns.index(sido_field)
+
+        targets = []
+        for row in range(table.rowCount()):
+            lat_item = table.item(row, lat_col)
+            lon_item = table.item(row, lon_col)
+            latitude = self.to_float(lat_item.text() if lat_item else "")
+            longitude = self.to_float(lon_item.text() if lon_item else "")
+            if latitude is None or longitude is None:
+                continue
+            sido_item = table.item(row, sido_col)
+            if sido_item and sido_item.text():
+                continue
+            targets.append((row, latitude, longitude))
+
+        if not targets:
+            QMessageBox.information(
+                self, "주소 일괄 조회", "주소를 조회할 행이 없습니다 (위도/경도가 있고 주소가 비어있는 행만 대상)."
+            )
+            return
+
+        progress = QProgressDialog(
+            "주소를 조회하는 중... (조회 서비스 제한으로 행마다 시간이 걸립니다)", "취소", 0, len(targets), self
+        )
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(300)
+
+        field_triples = [
+            (korean_field, english_field, key)
+            for korean_field, (english_field, key) in address_fields.items()
+            if key != "detail"
+        ]
+
+        success = 0
+        failed = 0
+        last_error = ""
+        was_blocked = table.blockSignals(True)
+        try:
+            for index, (row, latitude, longitude) in enumerate(targets):
+                progress.setLabelText(f"{index + 1}/{len(targets)}행 주소 조회 중...")
+                progress.setValue(index)
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    break
+
+                try:
+                    address_ko = self.reverse_geocode(latitude, longitude, "ko")
+                    # Nominatim 무료 API는 초당 1건이 상한선이라, 요청 자체에 걸리는 시간까지
+                    # 감안해서 여유를 두지 않으면(정확히 1초만 쉬면) 한도를 넘겨 조용히
+                    # 차단(빈 결과/오류)당하는 경우가 있었음 -> 여유를 더 둠
+                    time.sleep(1.5)
+                    address_en = self.reverse_geocode(latitude, longitude, "en")
+                    time.sleep(1.5)
+                except Exception as exc:
+                    failed += 1
+                    last_error = str(exc)
+                    continue
+                if not address_ko:
+                    failed += 1
+                    last_error = "조회 결과 없음"
+                    continue
+
+                for korean_field, english_field, key in field_triples:
+                    korean_value = address_ko.get(key, "")
+                    if not korean_value:
+                        continue
+                    table.setItem(row, row_columns.index(korean_field), QTableWidgetItem(korean_value))
+
+                    english_value = address_en.get(key, "") if address_en else ""
+                    if english_value and english_value != korean_value:
+                        table.setItem(row, row_columns.index(english_field), QTableWidgetItem(english_value))
+                    else:
+                        english_text, _ = self.address_master.match_english(key, korean_value)
+                        if english_text:
+                            table.setItem(row, row_columns.index(english_field), QTableWidgetItem(english_text))
+                success += 1
+        finally:
+            table.blockSignals(was_blocked)
+            progress.setValue(len(targets))
+
+        failure_note = f", 조회 실패 {failed}건 (마지막 사유: {last_error})" if failed else ""
+        status_setter(f"주소 일괄 조회 완료: 성공 {success}/{len(targets)}행{failure_note}")
+
     def fill_specimen_address_from_latlon(self):
         latitude = self.to_float(self.get_form_value("위도", self.specimen_form_widgets))
         longitude = self.to_float(self.get_form_value("경도", self.specimen_form_widgets))
@@ -1405,6 +1740,7 @@ class UploadTab(QWidget):
             self.specimen_autosave_suspended = False
             progress.setValue(len(image_files))
 
+        self.refresh_location_validation(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         self.autosave_specimen_draft()
         cancel_note = "\n(취소되어 일부만 불러왔습니다.)" if added_count < len(image_files) else ""
         QMessageBox.information(
@@ -1625,6 +1961,8 @@ class UploadTab(QWidget):
             item.setBackground(SPECIMEN_TAXON_EDITED_COLOR)
         if item.column() == SPECIMEN_ROW_COLUMNS.index("NO."):
             self.renumber_specimen_rows_below(item.row())
+        if column_name in {"위도", "경도"}:
+            self.revalidate_row_location(self.specimen_data_table, SPECIMEN_ROW_COLUMNS, item.row())
         if item.row() == self.current_specimen_data_row():
             self.load_selected_specimen_row_to_form()
             if column_name == "국명":
@@ -1720,6 +2058,7 @@ class UploadTab(QWidget):
         self.write_specimen_data_row(row, values)
 
     def write_specimen_data_row(self, row: int, values: dict[str, Any]):
+        values = self.preserve_row_database_number(self.specimen_data_table, SPECIMEN_ROW_COLUMNS, row, values)
         was_blocked = self.specimen_data_table.blockSignals(True)
         try:
             for col, column_name in enumerate(SPECIMEN_ROW_COLUMNS):
@@ -1784,6 +2123,7 @@ class UploadTab(QWidget):
                 self.normalize_specimen_date_field(date_field)
             self.write_specimen_data_row(current_row, self.collect_specimen_form_values())
 
+        self.refresh_location_validation(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         self.autosave_specimen_draft()
         self.set_specimen_save_status(f"붙여넣기 완료: {len(rows)}행")
 
@@ -1884,7 +2224,6 @@ class UploadTab(QWidget):
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "rows": rows,
             "current_form": current_form,
-            "excel_path": self.specimen_excel_file_path,
             "media_storage_dir": self.specimen_media_storage_dir,
         }
         self.write_json(SPECIMEN_DRAFT_FILE, payload)
@@ -1892,13 +2231,12 @@ class UploadTab(QWidget):
     def read_specimen_draft(self) -> dict[str, Any]:
         data = self.read_json(SPECIMEN_DRAFT_FILE, {})
         if not isinstance(data, dict):
-            return {"rows": [], "current_form": {}, "excel_path": "", "media_storage_dir": ""}
+            return {"rows": [], "current_form": {}, "media_storage_dir": ""}
         rows = data.get("rows", [])
         current_form = data.get("current_form", {})
         return {
             "rows": rows if isinstance(rows, list) else [],
             "current_form": current_form if isinstance(current_form, dict) else {},
-            "excel_path": str(data.get("excel_path", "")),
             "media_storage_dir": str(data.get("media_storage_dir", "")),
         }
 
@@ -1907,7 +2245,6 @@ class UploadTab(QWidget):
         self.copy_pending_media_for_all_specimen_rows()
         records = self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         self.write_specimen_draft(records, self.collect_specimen_form_values())
-        self.write_specimen_current_excel(records)
         self.set_specimen_save_status(f"임시저장 완료: {len(records)}건")
         QMessageBox.information(
             self, "작성 내용 저장", f"작성 중인 표본 데이터 {len(records)}건을 저장했습니다.\n{SPECIMEN_DRAFT_FILE}"
@@ -1925,14 +2262,12 @@ class UploadTab(QWidget):
             if current_form:
                 for column_name in SPECIMEN_ROW_COLUMNS:
                     self.set_form_value(column_name, current_form.get(column_name, ""), self.specimen_form_widgets)
-            self.specimen_excel_file_path = draft.get("excel_path", "")
-            if self.specimen_excel_file_path:
-                self.set_specimen_save_status(f"엑셀 자동반영 대상: {self.specimen_excel_file_path}")
             self.specimen_media_storage_dir = draft.get("media_storage_dir", "")
             if self.specimen_media_storage_dir and hasattr(self, "specimen_media_storage_path_input"):
                 self.specimen_media_storage_path_input.setText(self.specimen_media_storage_dir)
         finally:
             self.specimen_autosave_suspended = False
+        self.refresh_location_validation(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
 
     def reload_specimen_draft(self):
         self.specimen_autosave_suspended = True
@@ -1949,6 +2284,8 @@ class UploadTab(QWidget):
         records = self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         if not records:
             QMessageBox.warning(self, "엑셀 저장", "저장할 행이 없습니다.")
+            return
+        if not self.confirm_location_issues_before_save(self.specimen_data_table, SPECIMEN_ROW_COLUMNS):
             return
 
         default_name = f"new_specimen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
@@ -1979,7 +2316,6 @@ class UploadTab(QWidget):
             self.specimen_data_table.setRowCount(0)
         finally:
             self.specimen_autosave_suspended = False
-        self.specimen_excel_file_path = ""
         self.clear_specimen_form()
         self.write_specimen_draft([], self.collect_specimen_form_values())
         self.set_specimen_save_status("엑셀 저장 완료. 새 작성을 시작합니다 (NO. 1부터).")
@@ -1990,16 +2326,16 @@ class UploadTab(QWidget):
             return
 
         try:
-            df = pd.read_excel(file_path)
+            df = self.select_excel_sheet(file_path)
         except Exception as exc:
             QMessageBox.critical(self, "엑셀 불러오기 실패", str(exc))
             return
 
-        missing_columns = [column for column in SPECIMEN_ROW_COLUMNS if column not in df.columns]
-        if missing_columns:
-            QMessageBox.warning(
-                self, "엑셀 불러오기", f"'작성한 그대로' 형식의 엑셀이 아닙니다. 없는 컬럼: {', '.join(missing_columns)}"
-            )
+        if df is None:
+            return
+
+        df = self.map_excel_columns(df, SPECIMEN_ROW_COLUMNS, SPECIMEN_FINAL_EXPORT_COLUMNS, "specimen")
+        if df is None:
             return
 
         if self.specimen_data_table.rowCount() > 0:
@@ -2012,23 +2348,16 @@ class UploadTab(QWidget):
             self.specimen_data_table.setRowCount(0)
             for _, row in df.iterrows():
                 record = {column: self.clean_master_value(row[column]) for column in SPECIMEN_ROW_COLUMNS}
+                if not record["데이터베이스번호"] and record.get("이전데이터베이스번호"):
+                    record["데이터베이스번호"] = record["이전데이터베이스번호"]
                 self.add_specimen_data_row(record)
         finally:
             self.specimen_autosave_suspended = False
 
-        self.specimen_excel_file_path = file_path
+        self.refresh_location_validation(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         self.autosave_specimen_draft()
         self.set_specimen_save_status(f"엑셀 불러오기 완료: {file_path} ({len(df)}건)")
 
-    def write_specimen_current_excel(self, records: list[dict[str, Any]]):
-        if not self.specimen_excel_file_path:
-            return
-        try:
-            self.write_specimen_excel_file(self.specimen_excel_file_path, records)
-            self.write_specimen_final_excel_file(str(self.final_excel_path(self.specimen_excel_file_path)), records)
-            self.set_specimen_save_status(f"엑셀 자동반영 완료: {self.specimen_excel_file_path}")
-        except Exception as exc:
-            self.set_specimen_save_status(f"엑셀 자동반영 실패: {exc}")
 
     @staticmethod
     def write_specimen_excel_file(file_path: str, records: list[dict[str, Any]]):
@@ -2036,12 +2365,7 @@ class UploadTab(QWidget):
 
     @staticmethod
     def write_specimen_final_excel_file(file_path: str, records: list[dict[str, Any]]):
-        final_records = [
-            {target: (record.get(source, "") if source else "") for target, source in SPECIMEN_FINAL_EXPORT_COLUMNS}
-            for record in records
-        ]
-        final_columns = [target for target, _ in SPECIMEN_FINAL_EXPORT_COLUMNS]
-        pd.DataFrame(final_records, columns=final_columns).to_excel(file_path, index=False)
+        write_final_template(file_path, records, SPECIMEN_FINAL_EXPORT_COLUMNS, "specimen")
 
     def sync_specimen_media_filename_field(self, *_):
         value = self.get_form_value("파일경로", self.specimen_form_widgets)
@@ -2063,6 +2387,7 @@ class UploadTab(QWidget):
     def set_specimen_save_status(self, message: str):
         if hasattr(self, "specimen_save_status_label"):
             self.specimen_save_status_label.setText(message)
+            self.specimen_save_status_label.setToolTip(message)
 
     def _build_project_tab(self) -> QWidget:
         tab = QWidget()
@@ -2162,11 +2487,11 @@ class UploadTab(QWidget):
 
         self.species_master_df = df
         lookup: dict[str, list[dict[str, Any]]] = {}
-        for _, row in df.iterrows():
-            korean_name = normalize_text(row.get("국명"))
+        for record in df.to_dict("records"):
+            korean_name = normalize_text(record.get("국명"))
             if not korean_name:
                 continue
-            lookup.setdefault(korean_name, []).append(row.to_dict())
+            lookup.setdefault(korean_name, []).append(record)
         self.species_name_lookup = lookup
 
     def rebuild_lookups(self):
@@ -2239,6 +2564,8 @@ class UploadTab(QWidget):
         media_type = self.get_form_value("미디어타입")
         media_code = MEDIA_TYPE_CODES.get(media_type, "")
         self.set_form_value("미디어코드", media_code)
+        if self.restore_existing_database_number(False):
+            return
 
         organization_code = self.get_form_value("기관코드")
         media_code = self.get_form_value("미디어코드")
@@ -2308,6 +2635,8 @@ class UploadTab(QWidget):
             return
         if item.column() == ROW_COLUMNS.index("NO."):
             self.renumber_rows_below(item.row())
+        if ROW_COLUMNS[item.column()] in {"위도", "경도"}:
+            self.revalidate_row_location(self.data_table, ROW_COLUMNS, item.row())
         if item.row() == self.current_data_row():
             self.load_selected_row_to_form()
             column_name = ROW_COLUMNS[item.column()]
@@ -2452,6 +2781,117 @@ class UploadTab(QWidget):
         else:
             self.set_save_status(f"{korean_field} → {english_text} (유사 매칭, 확인 필요)")
 
+    def open_location_on_map(self):
+        self.open_location_on_map_for(self.get_form_value("위도"), self.get_form_value("경도"))
+
+    def open_all_locations_on_map(self):
+        self.open_all_locations_on_map_for(self.data_table, ROW_COLUMNS, ADDRESS_FIELDS, "map_preview.html")
+
+    def fill_all_addresses_from_latlon(self):
+        self.batch_fill_addresses(self.data_table, ROW_COLUMNS, ADDRESS_FIELDS, self.set_save_status)
+
+    def fill_all_species_and_project(self):
+        self.batch_fill_species_and_project(
+            self.data_table, ROW_COLUMNS, self.form_widgets, self.set_save_status, self.schedule_autosave
+        )
+
+    @staticmethod
+    def scientific_name_key(name: Any) -> str:
+        # "Aegypius monachus (Linnaeus, 1766)" → "aegypius monachus" (명명자/연도 차이 무시)
+        return " ".join(normalize_text(name).split()[:2]).lower()
+
+    def batch_fill_species_and_project(
+        self, table: QTableWidget, row_columns: list[str], widgets: dict[str, Any], status_setter, after_change
+    ):
+        """설정 창에서 선택한 종정보/사업/미디어를 전체 행에 적용."""
+        row_count = table.rowCount()
+        if row_count == 0:
+            QMessageBox.information(self, "종ID·사업 일괄 적용", "적용할 행이 없습니다.")
+            return
+        dialog = BatchApplyDialog(
+            self.projects, MEDIA_TYPE_CODES if "미디어타입" in row_columns else {}, row_count, self
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        options = dialog.values()
+        project = options["project"]
+        media_type = options["media_type"]
+
+        scientific_lookup: dict[str, dict[str, Any]] = {}
+        for record in self.species_master_df.to_dict("records") if not self.species_master_df.empty else []:
+            key = self.scientific_name_key(record.get("학명"))
+            if key:
+                scientific_lookup.setdefault(key, record)
+
+        col = {name: index for index, name in enumerate(row_columns)}
+
+        def cell(row: int, name: str) -> str:
+            item = table.item(row, col[name])
+            return item.text().strip() if item else ""
+
+        def put(row: int, name: str, value: Any):
+            table.setItem(row, col[name], QTableWidgetItem("" if value is None else str(value)))
+
+        matched = unmatched = 0
+        was_blocked = table.blockSignals(True)
+        table.setUpdatesEnabled(False)
+        try:
+            for row in range(row_count):
+                if project:
+                    put(row, "사업명", project.get("사업명", ""))
+                    put(row, "사업년도", project.get("사업년도", ""))
+                    put(row, "순번", project.get("순번", ""))
+
+                if media_type:
+                    put(row, "미디어타입", media_type)
+                    put(row, "미디어코드", MEDIA_TYPE_CODES[media_type])
+
+                if (project or media_type) and not (options.get("preserve_database_numbers", True) and cell(row, "데이터베이스번호")):
+                    parts = [cell(row, name) for name in ("기관코드", "분류코드", "사업년도", "순번", "NO.")]
+                    code = cell(row, "미디어코드") if "미디어코드" in col else "SP"
+                    number = ""
+                    if all(parts) and code:
+                        try:
+                            org, taxon, year, order, no = parts
+                            number = f"{org}-{code}-{taxon}-{year[-2:].zfill(2)}{int(order):02d}{int(no):05d}"
+                        except ValueError:
+                            pass
+                    put(row, "데이터베이스번호", number)
+
+                if not options["species"]:
+                    continue
+
+                korean_name = normalize_text(cell(row, "국명"))
+                scientific_name = cell(row, "학명")
+                matches = self.species_name_lookup.get(korean_name, []) if korean_name else []
+                match = matches[0] if matches else scientific_lookup.get(self.scientific_name_key(scientific_name) or None)
+                if not match:
+                    if korean_name or scientific_name:
+                        unmatched += 1
+                    continue
+                species_id = self.clean_master_value(match.get("종고유ID"))
+                if species_id in {"", "0"}:
+                    species_id = self.clean_master_value(match.get("종학명정보ID"))
+                put(row, "종고유ID", species_id)
+                put(row, "학명", normalize_text(match.get("학명")))
+                if not korean_name:
+                    put(row, "국명", normalize_text(match.get("국명")))
+                if "속명" in col:  # 표본: 속명/종명도 마스터 값으로
+                    put(row, "속명", normalize_text(match.get("속명국문명")))
+                    put(row, "종명", normalize_text(match.get("종소명국문명")))
+                matched += 1
+        finally:
+            table.setUpdatesEnabled(True)
+            table.blockSignals(was_blocked)
+
+        if table is self.data_table:
+            self.load_selected_row_to_form()
+        else:
+            self.load_selected_specimen_row_to_form()
+        after_change()
+        unmatched_note = f", 마스터에 없음 {unmatched}행" if unmatched else ""
+        status_setter(f"일괄 적용 완료: 전체 {row_count}행, 종 매칭 {matched}행{unmatched_note}")
+
     def fill_address_from_latlon(self):
         latitude = self.to_float(self.get_form_value("위도"))
         longitude = self.to_float(self.get_form_value("경도"))
@@ -2569,6 +3009,7 @@ class UploadTab(QWidget):
             self.autosave_suspended = False
             progress.setValue(len(media_files))
 
+        self.refresh_location_validation(self.data_table, ROW_COLUMNS)
         self.autosave_draft()
         cancel_note = "\n(취소되어 일부만 불러왔습니다.)" if added_count < len(media_files) else ""
         QMessageBox.information(
@@ -3040,12 +3481,104 @@ class UploadTab(QWidget):
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def validate_latlon(latitude_text: str, longitude_text: str) -> str:
+        # 빈 문자열이면 "" 반환(정상), 그 외엔 문제를 설명하는 한글 메시지를 반환.
+        # 셀 배경색 표시와 저장 전 팝업 둘 다 이 메시지를 그대로 재사용함.
+        lat_text = normalize_text(latitude_text)
+        lon_text = normalize_text(longitude_text)
+        if not lat_text and not lon_text:
+            return ""
+        if bool(lat_text) != bool(lon_text):
+            return "위도/경도 중 한쪽만 입력됨"
+
+        latitude = UploadTab.to_float(lat_text)
+        longitude = UploadTab.to_float(lon_text)
+        if latitude is None or longitude is None:
+            return "위도/경도가 숫자가 아님"
+        if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            return "위도/경도 범위 오류 (위도 -90~90, 경도 -180~180)"
+
+        lat_min, lat_max = KOREA_LAT_RANGE
+        lon_min, lon_max = KOREA_LON_RANGE
+        in_korea = lat_min <= latitude <= lat_max and lon_min <= longitude <= lon_max
+        looks_swapped = lat_min <= longitude <= lat_max and lon_min <= latitude <= lon_max
+        if not in_korea and looks_swapped:
+            return "위도/경도가 뒤바뀐 것 같습니다"
+        if not in_korea:
+            return "국내 범위를 벗어남 (해외 건이면 무시해도 됩니다)"
+        return ""
+
+    def location_validation_issues(self, table: QTableWidget, row_columns: list[str]) -> list[tuple[int, str, str]]:
+        lat_col = row_columns.index("위도")
+        lon_col = row_columns.index("경도")
+        no_col = row_columns.index("NO.")
+        issues = []
+        for row in range(table.rowCount()):
+            lat_item = table.item(row, lat_col)
+            lon_item = table.item(row, lon_col)
+            message = self.validate_latlon(lat_item.text() if lat_item else "", lon_item.text() if lon_item else "")
+            if not message:
+                continue
+            no_item = table.item(row, no_col)
+            label = f"NO. {no_item.text()}" if no_item and no_item.text() else f"{row + 1}행"
+            issues.append((row, label, message))
+        return issues
+
+    def revalidate_row_location(self, table: QTableWidget, row_columns: list[str], row: int):
+        lat_col = row_columns.index("위도")
+        lon_col = row_columns.index("경도")
+        lat_item = table.item(row, lat_col)
+        lon_item = table.item(row, lon_col)
+        message = self.validate_latlon(lat_item.text() if lat_item else "", lon_item.text() if lon_item else "")
+        if message:
+            if lat_item is None:
+                lat_item = QTableWidgetItem("")
+                table.setItem(row, lat_col, lat_item)
+            if lon_item is None:
+                lon_item = QTableWidgetItem("")
+                table.setItem(row, lon_col, lon_item)
+            lat_item.setBackground(LOCATION_ERROR_COLOR)
+            lon_item.setBackground(LOCATION_ERROR_COLOR)
+            lat_item.setToolTip(message)
+            lon_item.setToolTip(message)
+        else:
+            if lat_item is not None:
+                lat_item.setBackground(QBrush())
+                lat_item.setToolTip("")
+            if lon_item is not None:
+                lon_item.setBackground(QBrush())
+                lon_item.setToolTip("")
+
+    def refresh_location_validation(self, table: QTableWidget, row_columns: list[str]):
+        was_blocked = table.blockSignals(True)
+        try:
+            for row in range(table.rowCount()):
+                self.revalidate_row_location(table, row_columns, row)
+        finally:
+            table.blockSignals(was_blocked)
+
+    def confirm_location_issues_before_save(self, table: QTableWidget, row_columns: list[str]) -> bool:
+        issues = self.location_validation_issues(table, row_columns)
+        if not issues:
+            return True
+        lines = "\n".join(f"- {label}: {message}" for _, label, message in issues[:20])
+        more_note = f"\n... 외 {len(issues) - 20}건" if len(issues) > 20 else ""
+        reply = QMessageBox.warning(
+            self,
+            "위치 확인 필요",
+            f"위도/경도에 문제가 있어 보이는 행이 {len(issues)}건 있습니다:\n{lines}{more_note}\n\n그래도 저장하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
+
     def add_data_row(self, values: dict[str, Any]):
         row = self.data_table.rowCount()
         self.data_table.insertRow(row)
         self.write_data_row(row, values)
 
     def write_data_row(self, row: int, values: dict[str, Any]):
+        values = self.preserve_row_database_number(self.data_table, ROW_COLUMNS, row, values)
         was_blocked = self.data_table.blockSignals(True)
         try:
             for col, column_name in enumerate(ROW_COLUMNS):
@@ -3061,6 +3594,32 @@ class UploadTab(QWidget):
         # selectedIndexes()는 정렬 보장이 없어서(드래그 방향에 따라 순서가 달라짐)
         # indexes[0]을 쓰면 셀 범위를 드래그로 선택했을 때 엉뚱한 행이 잡힘 -> 항상 맨 위 행으로
         return min(index.row() for index in indexes)
+
+    def preserve_row_database_number(self, table, columns, row, values):
+        if self.preserve_database_numbers.isChecked():
+            item = table.item(row, columns.index("데이터베이스번호"))
+            if item and item.text().strip():
+                values = dict(values)
+                values["데이터베이스번호"] = item.text()
+        return values
+
+    def restore_existing_database_number(self, specimen):
+        if not self.preserve_database_numbers.isChecked():
+            return False
+        table_name = "specimen_data_table" if specimen else "data_table"
+        if not hasattr(self, table_name):
+            return False
+        table = getattr(self, table_name)
+        row = self.current_specimen_data_row() if specimen else self.current_data_row()
+        if row is None:
+            return False
+        columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
+        item = table.item(row, columns.index("데이터베이스번호"))
+        if not item or not item.text().strip():
+            return False
+        widgets = self.specimen_form_widgets if specimen else self.form_widgets
+        self.set_form_value("데이터베이스번호", item.text(), widgets)
+        return True
 
     def paste_clipboard_into_table(self):
         text = QApplication.clipboard().text()
@@ -3115,6 +3674,7 @@ class UploadTab(QWidget):
                 self.normalize_date_field(date_field)
             self.write_data_row(current_row, self.collect_form_values())
 
+        self.refresh_location_validation(self.data_table, ROW_COLUMNS)
         self.autosave_draft()
         self.set_save_status(f"붙여넣기 완료: {len(rows)}행")
 
@@ -3225,7 +3785,6 @@ class UploadTab(QWidget):
         self.capture_pending_video_thumbnails()
         records = self.table_to_records(self.data_table, ROW_COLUMNS)
         self.write_draft(records, self.collect_form_values())
-        self.write_current_excel(records)
         self.set_save_status(f"임시저장 완료: {len(records)}건")
         QMessageBox.information(self, "작성 내용 저장", f"작성 중인 신규 데이터 {len(records)}건을 저장했습니다.\n{DRAFT_FILE}")
 
@@ -3241,14 +3800,12 @@ class UploadTab(QWidget):
             if current_form:
                 for column_name in ROW_COLUMNS:
                     self.set_form_value(column_name, current_form.get(column_name, ""))
-            self.excel_file_path = draft.get("excel_path", "")
-            if self.excel_file_path:
-                self.set_save_status(f"엑셀 자동반영 대상: {self.excel_file_path}")
             self.media_storage_dir = draft.get("media_storage_dir", "")
             if self.media_storage_dir and hasattr(self, "media_storage_path_input"):
                 self.media_storage_path_input.setText(self.media_storage_dir)
         finally:
             self.autosave_suspended = False
+        self.refresh_location_validation(self.data_table, ROW_COLUMNS)
 
     def reload_draft(self):
         self.autosave_suspended = True
@@ -3266,6 +3823,8 @@ class UploadTab(QWidget):
         records = self.table_to_records(self.data_table, ROW_COLUMNS)
         if not records:
             QMessageBox.warning(self, "엑셀 저장", "저장할 행이 없습니다.")
+            return
+        if not self.confirm_location_issues_before_save(self.data_table, ROW_COLUMNS):
             return
 
         default_name = f"new_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
@@ -3296,10 +3855,57 @@ class UploadTab(QWidget):
             self.data_table.setRowCount(0)
         finally:
             self.autosave_suspended = False
-        self.excel_file_path = ""
         self.clear_form()
         self.write_draft([], self.collect_form_values())
         self.set_save_status("엑셀 저장 완료. 새 작성을 시작합니다 (NO. 1부터).")
+
+    def map_excel_columns(self, df: pd.DataFrame, columns: list[str], export_columns, kind: str) -> pd.DataFrame | None:
+        """엑셀 컬럼을 프로그램 컬럼으로 매핑. 자동 매칭 후 매핑 창에서 확인. 취소 시 None.
+        kind("row"/"specimen")별로 사용자가 정한 매핑을 COLUMN_MAPPINGS_FILE에 저장해 다음에 자동 적용."""
+        df = df.dropna(axis=1, how="all")  # 헤더만 있고 값이 없는 열(빈 서식 열 포함)은 매핑 대상에서 제외
+        df.columns = [str(name).strip() for name in df.columns]
+        all_saved = self.read_json(COLUMN_MAPPINGS_FILE, {})
+        saved = all_saved.get(kind, {})
+        mapping = auto_map(df.columns, columns, export_columns, saved)
+        dialog = ColumnMappingDialog(df, mapping, columns, self)
+        if dialog.exec() != QDialog.Accepted:
+            return None
+        mapping = dialog.mapping()
+        all_saved[kind] = {**saved, **mapping}
+        self.write_json(COLUMN_MAPPINGS_FILE, all_saved)
+        result = apply_mapping(df, mapping, columns)
+        epoch = df.attrs.get("excel_epoch", datetime(1899, 12, 30))
+        for field in DATE_FIELDS.intersection(result.columns):
+            result[field] = result[field].map(lambda value: UploadTab.clean_import_date(value, epoch))
+        return result
+
+    @staticmethod
+    def clean_import_date(value: Any, epoch: datetime = datetime(1899, 12, 30)) -> str:
+        if pd.isna(value):
+            return ""
+        if isinstance(value, date):
+            return value.strftime("%Y-%m-%d")
+        text = UploadTab.clean_master_value(value)
+        # Six/eight digit calendar dates retain their existing interpretation.
+        if text.isdigit() and len(text) in (6, 8):
+            return UploadTab.normalize_date_text(text)
+        if re.fullmatch(r"\d{1,5}(?:\.\d+)?", text):
+            serial = float(text)
+            if 1 <= serial < 100000:
+                # Excel's 1900 calendar includes a fictitious leap day.
+                if epoch == datetime(1899, 12, 30) and serial < 60:
+                    serial += 1
+                return (epoch + timedelta(days=serial)).strftime("%Y-%m-%d")
+        return UploadTab.normalize_date_text(text)
+
+    def select_excel_sheet(self, file_path):
+        with open_excel_lenient(file_path) as workbook:
+            sheet_name, accepted = QInputDialog.getItem(
+                self, "엑셀 시트 선택", "불러올 시트를 선택하세요.", workbook.sheet_names, 0, False
+            )
+            if not accepted:
+                return None
+            return parse_excel_sheet(workbook, sheet_name)
 
     def load_rows_from_excel(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "신규 데이터 엑셀 불러오기", "", "Excel Files (*.xlsx)")
@@ -3307,16 +3913,16 @@ class UploadTab(QWidget):
             return
 
         try:
-            df = pd.read_excel(file_path)
+            df = self.select_excel_sheet(file_path)
         except Exception as exc:
             QMessageBox.critical(self, "엑셀 불러오기 실패", str(exc))
             return
 
-        missing_columns = [column for column in ROW_COLUMNS if column not in df.columns]
-        if missing_columns:
-            QMessageBox.warning(
-                self, "엑셀 불러오기", f"'작성한 그대로' 형식의 엑셀이 아닙니다. 없는 컬럼: {', '.join(missing_columns)}"
-            )
+        if df is None:
+            return
+
+        df = self.map_excel_columns(df, ROW_COLUMNS, FINAL_EXPORT_COLUMNS, "row")
+        if df is None:
             return
 
         if self.data_table.rowCount() > 0:
@@ -3333,7 +3939,7 @@ class UploadTab(QWidget):
         finally:
             self.autosave_suspended = False
 
-        self.excel_file_path = file_path
+        self.refresh_location_validation(self.data_table, ROW_COLUMNS)
         self.autosave_draft()
         self.set_save_status(f"엑셀 불러오기 완료: {file_path} ({len(df)}건)")
 
@@ -3428,7 +4034,6 @@ class UploadTab(QWidget):
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "rows": rows,
             "current_form": current_form,
-            "excel_path": self.excel_file_path,
             "media_storage_dir": self.media_storage_dir,
         }
         self.write_json(DRAFT_FILE, payload)
@@ -3444,19 +4049,9 @@ class UploadTab(QWidget):
         return {
             "rows": rows if isinstance(rows, list) else [],
             "current_form": current_form if isinstance(current_form, dict) else {},
-            "excel_path": str(data.get("excel_path", "")),
             "media_storage_dir": str(data.get("media_storage_dir", "")),
         }
 
-    def write_current_excel(self, records: list[dict[str, Any]]):
-        if not self.excel_file_path:
-            return
-        try:
-            self.write_excel_file(self.excel_file_path, records)
-            self.write_final_excel_file(str(self.final_excel_path(self.excel_file_path)), records)
-            self.set_save_status(f"엑셀 자동반영 완료: {self.excel_file_path}")
-        except Exception as exc:
-            self.set_save_status(f"엑셀 자동반영 실패: {exc}")
 
     @staticmethod
     def write_excel_file(file_path: str, records: list[dict[str, Any]]):
@@ -3469,12 +4064,7 @@ class UploadTab(QWidget):
 
     @staticmethod
     def write_final_excel_file(file_path: str, records: list[dict[str, Any]]):
-        final_records = [
-            {target: (record.get(source, "") if source else "") for target, source in FINAL_EXPORT_COLUMNS}
-            for record in records
-        ]
-        final_columns = [target for target, _ in FINAL_EXPORT_COLUMNS]
-        pd.DataFrame(final_records, columns=final_columns).to_excel(file_path, index=False)
+        write_final_template(file_path, records, FINAL_EXPORT_COLUMNS, "observation")
 
     def populate_reference_table(self, table: QTableWidget, records: list[dict[str, Any]], columns: list[str]):
         table.setRowCount(0)
@@ -3607,3 +4197,4 @@ class UploadTab(QWidget):
     def set_save_status(self, message: str):
         if hasattr(self, "save_status_label"):
             self.save_status_label.setText(message)
+            self.save_status_label.setToolTip(message)

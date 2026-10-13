@@ -1,21 +1,14 @@
-import json
-import shutil
-from datetime import datetime
-from pathlib import Path
-import pandas as pd
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QStackedWidget,
     QTableWidget, QTableWidgetItem, QMessageBox, QVBoxLayout, QWidget,
 )
 from ui.tabs.dashboard_tab import DashboardTab
-from ui.tabs.species_master_tab import SpeciesMasterTab
-from ui.tabs.species_review_tab import SpeciesReviewTab
-from ui.tabs.upload_tab import UploadTab
-from ui.tabs.validataion_tab import ValidationTab
-from ui.tabs.sql_tab import SqlTab
-from ui.tabs.gbif_tab import GbifTab
-from config.paths import ASSETS_DIR, MASTER_FILE_PATH, LOCAL_VERSION_FILE_PATH, MASTER_DIR, META_DIR ,HISTORY_DIR
+# 미구현 탭은 구현 완료 후 다시 활성화합니다.
+# from ui.tabs.validataion_tab import ValidationTab
+# from ui.tabs.sql_tab import SqlTab
+# from ui.tabs.gbif_tab import GbifTab
+from config.paths import ASSETS_DIR
 
 
 
@@ -61,29 +54,61 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.pages, 1)
 
         self.dashboard_tab = DashboardTab()
-        self.master_tab = SpeciesMasterTab()
-        self.upload_tab = UploadTab()
-        self.species_review_tab = SpeciesReviewTab(self.upload_tab)
-        self.validation_tab = ValidationTab()
-        self.sql_tab = SqlTab()
-        self.gbif_tab = GbifTab()
+        self._loaded_pages = {0: self.dashboard_tab}
 
         for page, label in [
             (self.dashboard_tab, "대시보드"),
-            (self.master_tab, "종정보 마스터"),
-            (self.upload_tab, "신규 데이터"),
-            (self.species_review_tab, "신규/업데이트 종 정리"),
-            (self.validation_tab, "비교 결과"),
-            (self.sql_tab, "SQL 생성"),
-            (self.gbif_tab, "GBIF 데이터"),
+            (QWidget(), "종정보 마스터"),
+            (QWidget(), "신규 데이터"),
+            (QWidget(), "신규/업데이트 종 정리"),
+            # 미구현: 비교 결과, SQL 생성, GBIF 데이터
         ]:
             self.pages.addWidget(page)
             self.nav_list.addItem(label)
 
-        self.nav_list.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.nav_list.currentRowChanged.connect(self.show_page)
         self.nav_list.setCurrentRow(0)
 
+    def ensure_page(self, index):
+        if index not in self._loaded_pages:
+            if index == 1:
+                from ui.tabs.species_master_tab import SpeciesMasterTab
+                page = SpeciesMasterTab()
+            elif index == 2:
+                from ui.tabs.upload_tab import UploadTab
+                page = UploadTab()
+            elif index == 3:
+                from ui.tabs.species_review_tab import SpeciesReviewTab
+                page = SpeciesReviewTab(self.upload_tab)
+            else:
+                raise ValueError(index)
+            placeholder = self.pages.widget(index)
+            self.pages.removeWidget(placeholder)
+            placeholder.deleteLater()
+            self.pages.insertWidget(index, page)
+            self._loaded_pages[index] = page
+        return self._loaded_pages[index]
+
+    def show_page(self, index):
+        if index >= 0:
+            self.pages.setCurrentWidget(self.ensure_page(index))
+
+    @property
+    def master_tab(self):
+        return self.ensure_page(1)
+
+    @property
+    def upload_tab(self):
+        return self.ensure_page(2)
+
+    @property
+    def species_review_tab(self):
+        return self.ensure_page(3)
+
     def closeEvent(self, event):
+        if 2 not in self._loaded_pages:
+            event.accept()
+            return
         has_rows = self.upload_tab.data_table.rowCount() > 0
         has_form_content = self.upload_tab.has_form_content(self.upload_tab.collect_form_values())
         has_specimen_rows = self.upload_tab.specimen_data_table.rowCount() > 0

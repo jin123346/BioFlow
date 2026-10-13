@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 
 import pandas as pd
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QInputDialog,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -22,16 +23,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui.widgets.recent_file_dialog import RecentFileDialog as QFileDialog
 from services.species_master_service import SpeciesMasterService
+from services.classification_service import ClassificationService, RANK_FIELDS, import_reference_excel, read_version
 from ui.tabs.upload_tab import ROW_COLUMNS
 from utils.text_utils import clean_master_value, normalize_text
 
 TEMPLATE_COLUMNS = [
     "기존ID값",
+    "이전 국명 및 학명",
     "이전 국명",
     "이전 학명",
     "국명",
     "학명",
+    "clss_id",
     "clssc_sstem_kor",
     "clssc_sstem_latin",
     "일반적특징(크기,체색과무늬,주요형질 등)",
@@ -62,6 +67,7 @@ class SpeciesReviewTab(QWidget):
         super().__init__()
         self.upload_tab = upload_tab
         self.master_service = SpeciesMasterService()
+        self.classification_service = ClassificationService()
         self._master_df: pd.DataFrame | None = None
         self.form_widgets: dict[str, QWidget] = {}
         self._last_selected_row: int | None = None
@@ -76,7 +82,7 @@ class SpeciesReviewTab(QWidget):
         control_layout = QHBoxLayout()
         collect_button = QPushButton("관찰정보에서 미매칭 종 가져오기")
         collect_button.clicked.connect(self.collect_unmatched_species)
-        import_button = QPushButton("이전 국명/학명 엑셀 불러오기")
+        import_button = QPushButton("엑셀 불러오기·컬럼 매핑")
         import_button.clicked.connect(self.import_previous_names_from_excel)
         add_button = QPushButton("행 직접 추가")
         add_button.clicked.connect(self.add_blank_row)
@@ -87,6 +93,7 @@ class SpeciesReviewTab(QWidget):
         export_button = QPushButton("엑셀로 저장")
         export_button.clicked.connect(self.export_to_excel)
         self.status_label = QLabel("")
+        self.upload_tab.configure_status_label(self.status_label)
 
         control_layout.addWidget(collect_button)
         control_layout.addWidget(import_button)
@@ -94,9 +101,18 @@ class SpeciesReviewTab(QWidget):
         control_layout.addWidget(update_button)
         control_layout.addWidget(delete_button)
         control_layout.addWidget(export_button)
-        control_layout.addWidget(self.status_label)
         control_layout.addStretch()
         layout.addLayout(control_layout)
+        layout.addWidget(self.status_label)
+        reference_layout = QHBoxLayout()
+        reference_button = QPushButton("분류군 기준자료 업데이트")
+        reference_button.clicked.connect(self.import_classification_reference)
+        self.reference_label = QLabel()
+        self.reference_label.setWordWrap(True)
+        reference_layout.addWidget(reference_button)
+        reference_layout.addWidget(self.reference_label, 1)
+        layout.addLayout(reference_layout)
+        self.refresh_reference_label()
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -144,7 +160,11 @@ class SpeciesReviewTab(QWidget):
             widget = QLineEdit()
             self.form_widgets[column_name] = widget
             self.review_form.addRow(column_name, widget)
-            if column_name in {"이전 국명", "이전 학명"}:
+            if column_name in {field for pair in RANK_FIELDS for field in pair}:
+                widget.editingFinished.connect(self.refresh_form_classification)
+            if column_name in {"clss_id", "clssc_sstem_kor", "clssc_sstem_latin"}:
+                widget.setReadOnly(True)
+            if column_name in {"이전 국명", "이전 학명", "이전 국명 및 학명"}:
                 # 이전 국명/이전 학명을 적고 다른 칸으로 넘어가는 순간, 클릭해서
                 # "입력"을 누르기 전에도 미리 마스터 매칭 결과를 폼에서 바로 보여줌.
                 widget.editingFinished.connect(self.refresh_form_match)
@@ -170,9 +190,7 @@ class SpeciesReviewTab(QWidget):
 
         # 엑셀 불러오기와 동일하게, 이전 국명/이전 학명을 적었으면 "구분"을 직접
         # 안 골라도 마스터에서 매칭되는 순간 자동으로 "업데이트 필요"로 잡아줌.
-        korean_name = values.get("이전 국명", "")
-        scientific_name = values.get("이전 학명", "")
-        if (korean_name or scientific_name) and self.match_master(korean_name, scientific_name or korean_name) is not None:
+        if self.match_previous(values) is not None:
             values[STATUS_COLUMN] = "업데이트 필요"
 
         row = self._insert_row(values)
@@ -185,12 +203,8 @@ class SpeciesReviewTab(QWidget):
     def refresh_form_match(self):
         # 폼의 이전 국명/이전 학명만으로 마스터를 조회해서, 아직 표에 행을 넣기 전이라도
         # 기존ID값/clssc값을 폼에 바로 채워줌 (apply_update_match의 표 버전과 동일한 매칭 규칙).
-        korean_name = self.form_widgets["이전 국명"].text().strip()
         scientific_name = self.form_widgets["이전 학명"].text().strip()
-        if not korean_name and not scientific_name:
-            return
-
-        matched = self.match_master(korean_name, scientific_name or korean_name)
+        matched = self.match_previous(self.collect_form_values())
         if matched is None:
             return
 
@@ -198,8 +212,7 @@ class SpeciesReviewTab(QWidget):
         self.form_widgets["기존ID값"].setText(self.matched_species_id(matched))
         if not scientific_name:
             self.form_widgets["이전 학명"].setText(normalize_text(matched.get("학명")))
-        self.form_widgets["clssc_sstem_kor"].setText(normalize_text(matched.get("분류체계명(국문)")))
-        self.form_widgets["clssc_sstem_latin"].setText(normalize_text(matched.get("분류체계명(라틴)")))
+        self.refresh_form_classification()
 
     def current_table_row(self) -> int | None:
         rows = {index.row() for index in self.table.selectedIndexes()}
@@ -208,6 +221,7 @@ class SpeciesReviewTab(QWidget):
         return rows.pop()
 
     def write_row(self, row: int, values: dict[str, str]):
+        values = self.classify_values(values)
         combo = self.table.cellWidget(row, 0)
         if isinstance(combo, QComboBox):
             was_blocked = combo.blockSignals(True)
@@ -286,6 +300,7 @@ class SpeciesReviewTab(QWidget):
         self.add_species_row()
 
     def _insert_row(self, values: dict[str, str]) -> int:
+        values = self.classify_values(values)
         row = self.table.rowCount()
         self.table.insertRow(row)
 
@@ -323,10 +338,12 @@ class SpeciesReviewTab(QWidget):
         column_name = DISPLAY_COLUMNS[item.column()] if item.column() < len(DISPLAY_COLUMNS) else None
         # 기존ID값 조회는 "이전 국명"/"이전 학명" 칸을 적었을 때만 일어남.
         # 국명/학명 칸은 수정된(새) 값을 적는 칸이라 여기서 바뀌어도 기존ID값에 영향 없음.
-        if column_name in {"이전 국명", "이전 학명"}:
+        if column_name in {"이전 국명", "이전 학명", "이전 국명 및 학명"}:
             combo = self.table.cellWidget(item.row(), 0)
             if isinstance(combo, QComboBox) and combo.currentText() == "업데이트 필요":
                 self.apply_update_match(item.row())
+        if column_name in {field for pair in RANK_FIELDS for field in pair}:
+            self.apply_classification_match(item.row())
 
         # 표에서 직접 고친 값(매칭 결과 포함)을 위 폼에도 바로 반영 -- 지금 그 행이
         # 선택돼 있을 때만. write-back 루프 방지를 위해 load_selected_row_to_form이
@@ -346,12 +363,14 @@ class SpeciesReviewTab(QWidget):
 
     def apply_update_match(self, row: int):
         korean_name, scientific_name = self.previous_name_values(row)
-        if not korean_name and not scientific_name:
-            return
 
-        matched = self.match_master(korean_name, scientific_name or korean_name)
+        values = self.row_values(row)
+        combined = values.get("이전 국명 및 학명", "")
+        if not korean_name and not scientific_name and not combined:
+            return
+        matched = self.match_previous(values)
         if matched is None:
-            self.status_label.setText(f"'{korean_name or scientific_name}' 마스터와 정확히 일치하는 항목이 없어 비워둠")
+            self.status_label.setText(f"'{korean_name or scientific_name or combined}' 기존 종을 유일하게 확인하지 못했습니다. 기존ID값을 확인해 주세요.")
             return
 
         self.fill_matched_row(row, matched)
@@ -363,8 +382,6 @@ class SpeciesReviewTab(QWidget):
         # 매칭으로 얻는 값(기존ID/분류체계명)만 채우고 이전 학명은 비어있을 때만 채움.
         id_col = TEMPLATE_COLUMNS.index("기존ID값") + 1
         latin_col = TEMPLATE_COLUMNS.index("이전 학명") + 1
-        clssc_kor_col = TEMPLATE_COLUMNS.index("clssc_sstem_kor") + 1
-        clssc_latin_col = TEMPLATE_COLUMNS.index("clssc_sstem_latin") + 1
 
         was_blocked = self.table.blockSignals(True)
         try:
@@ -374,10 +391,9 @@ class SpeciesReviewTab(QWidget):
             if not (latin_item and latin_item.text().strip()):
                 self.table.setItem(row, latin_col, QTableWidgetItem(normalize_text(matched.get("학명"))))
 
-            self.table.setItem(row, clssc_kor_col, QTableWidgetItem(normalize_text(matched.get("분류체계명(국문)"))))
-            self.table.setItem(row, clssc_latin_col, QTableWidgetItem(normalize_text(matched.get("분류체계명(라틴)"))))
         finally:
             self.table.blockSignals(was_blocked)
+        self.apply_classification_match(row)
 
     def import_previous_names_from_excel(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -387,29 +403,29 @@ class SpeciesReviewTab(QWidget):
             return
 
         try:
-            df = pd.read_excel(file_path)
+            df = self.upload_tab.select_excel_sheet(file_path)
+            if df is None:
+                return
+            aliases = [("목 국명", "목 국문"), ("과 국명", "과 국문"),
+                       ("속 국명", "속 국문"), ("종 국명", "종 국문"),
+                       ("clssc_sstem_info_id", "clss_id")]
+            df = self.upload_tab.map_excel_columns(df, DISPLAY_COLUMNS, aliases, "species_review")
         except Exception as exc:
             QMessageBox.critical(self, "엑셀 불러오기 실패", str(exc))
             return
 
-        korean_column = next((c for c in ("이전 국명", "국명") if c in df.columns), None)
-        if korean_column is None:
-            QMessageBox.warning(self, "엑셀 불러오기", "'국명' 컬럼을 찾을 수 없습니다.")
+        if df is None:
             return
-        latin_column = next((c for c in ("이전 학명", "학명") if c in df.columns), None)
 
         added = 0
-        for _, row_data in df.iterrows():
-            korean_name = normalize_text(row_data.get(korean_column, ""))
-            if not korean_name:
+        for row_data in df.to_dict("records"):
+            values = {column: clean_master_value(row_data.get(column, "")) for column in TEMPLATE_COLUMNS}
+            if not any(values.values()):
                 continue
-            scientific_name = normalize_text(row_data.get(latin_column, "")) if latin_column else ""
-
-            matched = self.match_master(korean_name, scientific_name or korean_name)
-            values = {column: "" for column in TEMPLATE_COLUMNS}
-            values["이전 국명"] = korean_name
-            values["이전 학명"] = scientific_name
-            values[STATUS_COLUMN] = "업데이트 필요" if matched is not None else "신규"
+            matched = self.match_previous(values)
+            requested = clean_master_value(row_data.get(STATUS_COLUMN, ""))
+            previous = any(values.get(key) for key in ("이전 국명", "이전 학명", "이전 국명 및 학명", "기존ID값"))
+            values[STATUS_COLUMN] = "업데이트 필요" if previous or requested == "업데이트 필요" else "신규"
             table_row = self._insert_row(values)
 
             if matched is not None:
@@ -419,7 +435,76 @@ class SpeciesReviewTab(QWidget):
         if added == 0:
             QMessageBox.information(self, "엑셀 불러오기", "가져올 국명이 없습니다.")
             return
-        self.status_label.setText(f"엑셀에서 {added}건 가져옴 (기존ID/이전 학명/분류체계명 자동 매칭, 확인 필요)")
+        matched_count = sum(bool(self.row_values(row).get("clss_id")) for row in range(self.table.rowCount() - added, self.table.rowCount()))
+        self.status_label.setText(f"엑셀에서 {added}건 가져옴. 과 기준 분류ID 매칭 {matched_count}/{added}건. 빈 ID는 분류정보를 확인해 주세요.")
+
+    def classify_values(self, values):
+        values = dict(values)
+        match, reason = self.classification_service.match(values)
+        values["clss_id"] = str(match["clssc_sstem_info_id"]) if match else ""
+        values["clssc_sstem_kor"] = match["taxonomy_name"] if match else ""
+        values["clssc_sstem_latin"] = match["taxonomy_latin"] if match else ""
+        return values
+
+    def refresh_form_classification(self):
+        values = self.collect_form_values()
+        match, reason = self.classification_service.match(values)
+        classified = self.classify_values(values)
+        for field in ("clss_id", "clssc_sstem_kor", "clssc_sstem_latin"):
+            self.form_widgets[field].setText(classified[field])
+            self.form_widgets[field].setToolTip(reason)
+
+    def apply_classification_match(self, row):
+        values = self.row_values(row)
+        _, reason = self.classification_service.match(values)
+        classified = self.classify_values(values)
+        blocked = self.table.blockSignals(True)
+        try:
+            for field in ("clss_id", "clssc_sstem_kor", "clssc_sstem_latin"):
+                item = QTableWidgetItem(classified[field])
+                item.setToolTip(reason)
+                self.table.setItem(row, TEMPLATE_COLUMNS.index(field) + 1, item)
+        finally:
+            self.table.blockSignals(blocked)
+
+    def row_values(self, row):
+        return {column: (self.table.item(row, index + 1).text() if self.table.item(row, index + 1) else "")
+                for index, column in enumerate(TEMPLATE_COLUMNS)}
+
+    def match_previous(self, values):
+        korean = values.get("이전 국명", "")
+        latin = values.get("이전 학명", "")
+        combined = values.get("이전 국명 및 학명", "").strip()
+        probes = [(korean, latin)] if korean or latin else []
+        if combined:
+            candidates = [combined] + re.split(r"[/,;|\n]+", combined)
+            words = combined.split()
+            candidates += [" ".join(words[:i]) for i in range(1, len(words))]
+            candidates += [" ".join(words[i:]) for i in range(1, len(words))]
+            probes += [(text.strip(), text.strip()) for text in candidates if text.strip()]
+        matches = {}
+        for kr, sci in probes:
+            match = self.match_master(kr, sci)
+            if match is not None:
+                matches[self.matched_species_id(match)] = match
+        return next(iter(matches.values())) if len(matches) == 1 else None
+
+    def refresh_reference_label(self):
+        self.reference_label.setText(f"분류군 자료 버전: {read_version() or '미등록'} · 과와 입력된 상위 분류 기준으로 clss_id 자동 매칭")
+
+    def import_classification_reference(self):
+        path, _ = QFileDialog.getOpenFileName(self, "분류군 기준자료 선택", "", "Excel Files (*.xlsx)")
+        if not path:
+            return
+        version, accepted = QInputDialog.getText(self, "분류군 자료 버전", "새 자료 버전 (예: 2026-10-13)", text=datetime.now().strftime("%Y-%m-%d"))
+        if not accepted:
+            return
+        try:
+            result = import_reference_excel(path, version)
+            self.refresh_reference_label()
+            self.status_label.setText(f"분류군 기준자료 {result['version']} 등록: {result['rows']}건")
+        except Exception as exc:
+            QMessageBox.warning(self, "분류군 등록 실패", str(exc))
 
     @staticmethod
     def matched_species_id(matched) -> str:
@@ -440,19 +525,19 @@ class SpeciesReviewTab(QWidget):
         korean_name = normalize_text(korean_name)
         scientific_name = normalize_text(scientific_name)
 
-        if korean_name and "국명" in master_df.columns:
-            names = master_df["국명"].apply(normalize_text)
-            exact = master_df[names == korean_name]
-            if len(exact):
-                return exact.iloc[0]
-
-        if scientific_name and "학명" in master_df.columns:
-            sci_names = master_df["학명"].apply(normalize_text)
-            exact = master_df[sci_names == scientific_name]
-            if len(exact):
-                return exact.iloc[0]
-
-        return None
+        if getattr(self, "_indexed_master", None) is not master_df:
+            self._indexed_master = master_df
+            self._name_indexes = {"국명": {}, "학명": {}}
+            for record in master_df.to_dict("records"):
+                for field, index in self._name_indexes.items():
+                    key = normalize_text(record.get(field))
+                    if key:
+                        index.setdefault(key, []).append(record)
+        matches = {}
+        for field, value in (("국명", korean_name), ("학명", scientific_name)):
+            for record in self._name_indexes[field].get(value, []):
+                matches[self.matched_species_id(record)] = record
+        return next(iter(matches.values())) if len(matches) == 1 else None
 
     def delete_selected_rows(self):
         rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
@@ -460,12 +545,16 @@ class SpeciesReviewTab(QWidget):
             self.table.removeRow(row)
 
     def export_to_excel(self):
+        current = self.current_table_row()
+        if current is not None:
+            self.write_row(current, self.collect_form_values())
         if self.table.rowCount() == 0:
             QMessageBox.warning(self, "엑셀 저장", "저장할 행이 없습니다.")
             return
 
         records = []
         for row in range(self.table.rowCount()):
+            self.apply_classification_match(row)
             record = {}
             for offset, column_name in enumerate(TEMPLATE_COLUMNS, start=1):
                 item = self.table.item(row, offset)

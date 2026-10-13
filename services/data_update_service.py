@@ -8,6 +8,7 @@ from typing import Any
 
 from config.paths import DATA_DIR
 from services.species_master_service import SpeciesMasterService
+from services.classification_service import install_reference, read_version as read_classification_version
 
 logger = logging.getLogger("bioflow.data_update")
 
@@ -16,6 +17,8 @@ REMOTE_VERSION_URL = f"{GITHUB_RAW_BASE}/data/version.json"
 REMOTE_MASTER_URL = f"{GITHUB_RAW_BASE}/data/master/species_master.xlsx"
 REMOTE_ORGANIZATIONS_URL = f"{GITHUB_RAW_BASE}/data/reference/organizations.json"
 REMOTE_PROJECTS_URL = f"{GITHUB_RAW_BASE}/data/reference/upload_projects.json"
+REMOTE_CLASSIFICATION_VERSION_URL = f"{GITHUB_RAW_BASE}/data/classification/version.json"
+REMOTE_CLASSIFICATION_URL = f"{GITHUB_RAW_BASE}/data/classification/master.json"
 # 앱(exe) 자체의 새 릴리즈 확인용. data/version.json(종정보 마스터 버전)과는 별개 파일.
 # 새 버전을 배포할 때 이 파일의 version/download_url을 같이 올려야 알림이 뜸.
 REMOTE_APP_VERSION_URL = f"{GITHUB_RAW_BASE}/app_version.json"
@@ -93,6 +96,24 @@ def check_for_app_update(local_version: str) -> dict[str, Any] | None:
         return None
     remote.setdefault("download_url", DEFAULT_DOWNLOAD_URL)
     return remote
+
+
+def check_for_classification_update():
+    try:
+        remote = json.loads(_fetch_bytes(REMOTE_CLASSIFICATION_VERSION_URL, bust_cache=True).decode("utf-8"))
+        if not isinstance(remote, dict) or not remote.get("version") or not remote.get("sha256"):
+            return None
+        if str(remote["version"]) == read_classification_version():
+            return None
+        return remote
+    except Exception as exc:
+        logger.info("분류군 자료 버전 확인 실패: %s", exc)
+        return None
+
+
+def apply_classification_update(remote):
+    payload = _fetch_bytes(REMOTE_CLASSIFICATION_URL, timeout=30, bust_cache=True)
+    return install_reference(payload, remote["version"], remote["sha256"])
 
 
 def apply_update(remote_info: dict[str, Any]) -> None:

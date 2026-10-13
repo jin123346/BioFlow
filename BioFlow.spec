@@ -7,7 +7,22 @@
 # (config/paths.py의 ensure_data_seeded 참고). 이후 실행부터는 그쪽만 읽고 씀.
 
 import json
+import os
+import shutil
+import sys
 from pathlib import Path
+
+# Tcl cannot reliably resolve the Python install path when it contains Korean text.
+# Stage its scripts under the build directory; no files in the Python install are changed.
+_tcl_stage = Path('build/tcl-runtime').resolve()
+for _library in ('tcl8.6', 'tk8.6'):
+    shutil.copytree(Path(sys.base_prefix) / 'tcl' / _library, _tcl_stage / _library, dirs_exist_ok=True)
+os.environ['TCL_LIBRARY'] = str(_tcl_stage / 'tcl8.6')
+os.environ['TK_LIBRARY'] = str(_tcl_stage / 'tk8.6')
+# Splash imports this helper before the spec runs; refresh its earlier failed probe.
+from PyInstaller.utils.hooks import tcl_tk as _tcl_hook
+(_tcl_hook.tcl_dir, _tcl_hook.tcl_version,
+ _tcl_hook.tk_version, _tcl_hook.tcl_threaded) = _tcl_hook._get_tcl_tk_info()
 
 with open("VERSION", encoding="utf-8") as _f:
     APP_VERSION = _f.read().strip()
@@ -24,11 +39,19 @@ _app_version_data["version"] = APP_VERSION
 _app_version_data.setdefault("download_url", "https://github.com/jin123346/BioFlow/releases/latest")
 _app_version_path.write_text(json.dumps(_app_version_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+# Exclude local backups and in-progress drafts from distribution.
+seed_data = [
+    (str(path), str(path.parent))
+    for path in Path('data').rglob('*')
+    if path.is_file() and 'history' not in path.parts
+    and path.name not in {'new_data_draft.json', 'new_specimen_draft.json'}
+]
+
 a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('data', 'data'), ('assets', 'assets'), ('VERSION', '.')],
+    datas=seed_data + [('assets', 'assets'), ('VERSION', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -36,7 +59,7 @@ a = Analysis(
     # PyQt5: requirements.txt에 있지만 코드에서 실제로 쓰지 않음
     # scipy/pyarrow: 코드에서 안 쓰는데 pandas 설치 환경에 있으면 훅이 같이 끌고 옴
     # (둘이 unpacked 기준 150MB+ 차지) -> 제외해서 빌드 용량 줄임
-    excludes=['PyQt5', 'scipy', 'pyarrow'],
+    excludes=['PyQt5', 'scipy', 'pyarrow', 'IPython', 'pytest', 'jedi', 'matplotlib'],
     noarchive=False,
     optimize=0,
 )
