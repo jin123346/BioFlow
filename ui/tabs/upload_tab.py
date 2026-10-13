@@ -20,6 +20,7 @@ from PySide6.QtCore import QRect, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QBrush, QColor, QCursor, QDesktopServices, QPixmap
 
 logger = logging.getLogger("bioflow.upload_tab")
+DB_NUMBER_MANUAL_ROLE = Qt.UserRole + 1
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -132,6 +133,7 @@ ROW_COLUMNS = [
     "사업명",
     "사업년도",
     "순번",
+    "사업별 순번",
     "기관명",
     "기관코드",
     "국명",
@@ -287,7 +289,7 @@ MEDIA_EXTENSION_TYPES = {
     ".wav": "사운드", ".mp3": "사운드", ".m4a": "사운드", ".aac": "사운드", ".flac": "사운드",
 }
 
-AUTO_FIELDS = {"NO.", "미디어코드", "사업년도", "순번", "기관코드", "데이터베이스번호"}
+AUTO_FIELDS = {"사업별 순번", "NO.", "미디어코드", "사업년도", "순번", "기관코드", "데이터베이스번호"}
 DEFAULT_ORGANIZATION_NAME = "국립중앙과학관"
 
 SPECIMEN_DRAFT_FILE = REFERENCE_DIR / "new_specimen_draft.json"
@@ -305,6 +307,7 @@ SPECIMEN_ROW_COLUMNS = [
     "사업명",
     "사업년도",
     "순번",
+    "사업별 순번",
     "기관명",
     "기관코드",
     "국명",
@@ -388,7 +391,7 @@ SPECIMEN_ADDRESS_FIELDS = {
     "채집위치 상세 국문": ("채집위치 상세 영문", "detail"),
 }
 
-SPECIMEN_AUTO_FIELDS = {"NO.", "사업년도", "순번", "기관코드", "데이터베이스번호"}
+SPECIMEN_AUTO_FIELDS = {"사업별 순번", "NO.", "사업년도", "순번", "기관코드", "데이터베이스번호"}
 
 # 과명/속명/종명은 국명 조회 시 자동으로 채워지지만, 종정보 마스터에 과명 컬럼이
 # 없어 비워둔 채로 시작함 -> 사용자가 직접 채우거나 자동값을 고치면 노란색으로 표시해서
@@ -796,6 +799,10 @@ class UploadTab(QWidget):
         self.preserve_database_numbers = QCheckBox("기존 데이터베이스번호 유지 (해제하면 새 번호 생성)")
         self.preserve_database_numbers.setChecked(True)
         main_layout.addWidget(self.preserve_database_numbers)
+        regenerate_button = QPushButton("DB 번호 오류 검사 및 수정")
+        regenerate_button.setToolTip("현재 관찰/표본 탭의 DB 번호를 모두 검사하고 형식이 맞지 않는 번호만 수정합니다.")
+        regenerate_button.clicked.connect(self.repair_invalid_database_numbers)
+        main_layout.addWidget(regenerate_button)
 
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
@@ -819,7 +826,7 @@ class UploadTab(QWidget):
         update_row_button.clicked.connect(self.update_selected_data_row)
         delete_row_button = QPushButton("선택 행 삭제")
         delete_row_button.clicked.connect(self.delete_selected_data_rows)
-        lookup_species_button = QPushButton("국명 조회")
+        lookup_species_button = QPushButton("국명·학명 조회")
         lookup_species_button.clicked.connect(self.fill_species_from_korean_name)
         lookup_address_button = QPushButton("위도/경도로 주소 조회")
         lookup_address_button.clicked.connect(self.fill_address_from_latlon)
@@ -1001,6 +1008,9 @@ class UploadTab(QWidget):
                 elif column_name == "국명":
                     widget.setPlaceholderText("입력 후 Enter 또는 국명 조회")
                     widget.editingFinished.connect(self.fill_species_from_korean_name)
+                elif column_name == "학명":
+                    widget.setPlaceholderText("학명 입력 후 Enter 또는 국명·학명 조회")
+                    widget.editingFinished.connect(lambda: self.fill_species_from_korean_name(prefer_scientific=True))
                 elif column_name in ADDRESS_FIELDS:
                     if column_name == "관찰위치 상세 국문":
                         widget.setPlaceholderText("직접 입력 (자동완성 후보 제공, 영문 자동 매칭)")
@@ -1019,7 +1029,9 @@ class UploadTab(QWidget):
                     )
             if column_name in TEXT_DEFAULTS and isinstance(widget, QLineEdit):
                 widget.setText(TEXT_DEFAULTS[column_name])
-            if column_name in AUTO_FIELDS:
+            if column_name == "데이터베이스번호":
+                widget.editingFinished.connect(lambda: self.edit_database_number(False))
+            if column_name in AUTO_FIELDS and column_name != "데이터베이스번호":
                 widget.setEnabled(False)
                 if isinstance(widget, QLineEdit):
                     widget.setReadOnly(True)
@@ -1134,7 +1146,7 @@ class UploadTab(QWidget):
         update_row_button.clicked.connect(self.update_selected_specimen_data_row)
         delete_row_button = QPushButton("선택 행 삭제")
         delete_row_button.clicked.connect(self.delete_selected_specimen_data_rows)
-        lookup_species_button = QPushButton("국명 조회")
+        lookup_species_button = QPushButton("국명·학명 조회")
         lookup_species_button.clicked.connect(self.fill_specimen_taxon_from_korean_name)
         lookup_address_button = QPushButton("위도/경도로 주소 조회")
         lookup_address_button.clicked.connect(self.fill_specimen_address_from_latlon)
@@ -1287,6 +1299,8 @@ class UploadTab(QWidget):
                 elif column_name == "국명":
                     widget.setPlaceholderText("입력 후 Enter 또는 국명 조회")
                     widget.editingFinished.connect(self.fill_specimen_taxon_from_korean_name)
+                elif column_name == "학명":
+                    widget.editingFinished.connect(lambda: self.fill_specimen_taxon_from_korean_name(prefer_scientific=True))
                 elif column_name in SPECIMEN_TAXON_AUTOFILL_FIELDS:
                     widget.setPlaceholderText("국명 조회 시 자동 입력 (직접 수정 시 노란색 표시)")
                     widget.textEdited.connect(lambda _text, field=column_name: self.mark_specimen_taxon_edited(field))
@@ -1305,7 +1319,9 @@ class UploadTab(QWidget):
                     )
             if column_name in TEXT_DEFAULTS and isinstance(widget, QLineEdit):
                 widget.setText(TEXT_DEFAULTS[column_name])
-            if column_name in SPECIMEN_AUTO_FIELDS:
+            if column_name == "데이터베이스번호":
+                widget.editingFinished.connect(lambda: self.edit_database_number(True))
+            if column_name in SPECIMEN_AUTO_FIELDS and column_name != "데이터베이스번호":
                 widget.setEnabled(False)
                 if isinstance(widget, QLineEdit):
                     widget.setReadOnly(True)
@@ -1338,13 +1354,14 @@ class UploadTab(QWidget):
         self.apply_organization_to_form(label, self.specimen_form_widgets, self.refresh_specimen_generated_fields)
 
     def refresh_specimen_generated_fields(self):
+        self.set_form_value("사업별 순번", self.project_sequence_for_form(True), self.specimen_form_widgets)
         if self.restore_existing_database_number(True):
             return
         organization_code = self.get_form_value("기관코드", self.specimen_form_widgets)
         taxon_code = self.get_form_value("분류코드", self.specimen_form_widgets)
         year = self.get_form_value("사업년도", self.specimen_form_widgets)
         order = self.get_form_value("순번", self.specimen_form_widgets)
-        no = self.get_form_value("NO.", self.specimen_form_widgets)
+        no = self.get_form_value("사업별 순번", self.specimen_form_widgets)
         if organization_code and taxon_code and year and order and no:
             year_text = str(year)[-2:].zfill(2)
             self.set_form_value(
@@ -1368,22 +1385,25 @@ class UploadTab(QWidget):
             if isinstance(widget, QLineEdit):
                 widget.setStyleSheet("")
 
-    def fill_specimen_taxon_from_korean_name(self):
+    def fill_specimen_taxon_from_korean_name(self, prefer_scientific=False):
+        self.ensure_species_master_current()
         korean_name = normalize_text(self.get_form_value("국명", self.specimen_form_widgets))
-        if not korean_name:
+        scientific_input = normalize_text(self.get_form_value("학명", self.specimen_form_widgets))
+        if not korean_name and not scientific_input:
             self.set_specimen_species_status("")
             return
 
-        if not self.species_name_lookup:
+        if self.species_master_df.empty:
             self.set_specimen_species_status("종정보 마스터 없음")
             return
 
-        matches = self.species_name_lookup.get(korean_name, [])
+        matches = self.find_species_matches(korean_name, scientific_input, prefer_scientific)
         if not matches:
             self.set_specimen_species_status("마스터 매칭 없음")
             return
 
         match = matches[0]
+        self.set_form_value("국명", normalize_text(match.get("국명")), self.specimen_form_widgets)
         scientific_name = normalize_text(match.get("학명"))
         species_id = self.clean_master_value(match.get("종고유ID"))
         if species_id in {"", "0"}:
@@ -1902,6 +1922,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
     def add_specimen_data_row_from_form(self):
         self.set_form_value("NO.", self.next_specimen_no_value(), self.specimen_form_widgets)
         values = self.collect_specimen_form_values()
+        values = self.prepare_new_project_number(values, True)
         if not self.validate_specimen_form_values(values):
             return
         values = self.prepare_image_for_specimen_record(values)
@@ -1957,6 +1978,10 @@ html, body, #map {{ height: 100%; margin: 0; }}
         if self.specimen_autosave_suspended:
             return
         column_name = SPECIMEN_ROW_COLUMNS[item.column()]
+        if column_name in {"사업년도", "순번"}:
+            self.recalculate_project_sequences(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
+        if column_name == "데이터베이스번호":
+            self.mark_database_number_manual(self.specimen_data_table, item)
         if column_name in SPECIMEN_TAXON_AUTOFILL_FIELDS:
             item.setBackground(SPECIMEN_TAXON_EDITED_COLOR)
         if item.column() == SPECIMEN_ROW_COLUMNS.index("NO."):
@@ -1965,8 +1990,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
             self.revalidate_row_location(self.specimen_data_table, SPECIMEN_ROW_COLUMNS, item.row())
         if item.row() == self.current_specimen_data_row():
             self.load_selected_specimen_row_to_form()
-            if column_name == "국명":
-                self.fill_specimen_taxon_from_korean_name()
+            if column_name in {"국명", "학명"}:
+                self.fill_specimen_taxon_from_korean_name(prefer_scientific=column_name == "학명")
                 self.write_specimen_data_row(item.row(), self.collect_specimen_form_values())
             elif column_name in DATE_FIELDS:
                 self.normalize_specimen_date_field(column_name)
@@ -1988,6 +2013,9 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 next_no += 1
         finally:
             self.specimen_data_table.blockSignals(was_blocked)
+
+        if not self.specimen_autosave_suspended:
+            self.recalculate_project_sequences(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
 
     @staticmethod
     def default_specimen_field_value(column_name: str) -> Any:
@@ -2064,11 +2092,16 @@ html, body, #map {{ height: 100%; margin: 0; }}
             for col, column_name in enumerate(SPECIMEN_ROW_COLUMNS):
                 value = values.get(column_name, "")
                 item = QTableWidgetItem("" if value is None else str(value))
+                if column_name == "데이터베이스번호":
+                    item.setData(DB_NUMBER_MANUAL_ROLE, bool(values.get("_database_number_manual")))
                 if column_name in SPECIMEN_TAXON_AUTOFILL_FIELDS and column_name in self._specimen_taxon_edited_fields:
                     item.setBackground(SPECIMEN_TAXON_EDITED_COLOR)
                 self.specimen_data_table.setItem(row, col, item)
         finally:
             self.specimen_data_table.blockSignals(was_blocked)
+
+        if not self.specimen_autosave_suspended:
+            self.recalculate_project_sequences(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
 
     def paste_clipboard_into_specimen_table(self):
         text = QApplication.clipboard().text()
@@ -2471,9 +2504,11 @@ html, body, #map {{ height: 100%; margin: 0; }}
         self.organizations = self.read_json(ORGANIZATIONS_FILE, DEFAULT_ORGANIZATIONS)
         self.rebuild_lookups()
 
-    def load_species_master_lookup(self):
+    def load_species_master_lookup(self, dataframe=None):
+        self.species_scientific_lookup = {}
+        self._species_master_fingerprint = SpeciesMasterService.master_fingerprint()
         try:
-            df = self.master_service.load_last_master()
+            df = self.master_service.load_last_master() if dataframe is None else dataframe
         except Exception:
             self.species_master_df = pd.DataFrame()
             self.species_name_lookup = {}
@@ -2486,13 +2521,28 @@ html, body, #map {{ height: 100%; margin: 0; }}
             return
 
         self.species_master_df = df
+        self.species_scientific_lookup = {}
         lookup: dict[str, list[dict[str, Any]]] = {}
         for record in df.to_dict("records"):
+            scientific_key = self.scientific_name_key(record.get("학명"))
+            if scientific_key:
+                self.species_scientific_lookup.setdefault(scientific_key, []).append(record)
             korean_name = normalize_text(record.get("국명"))
             if not korean_name:
                 continue
             lookup.setdefault(korean_name, []).append(record)
         self.species_name_lookup = lookup
+        self._species_master_fingerprint = SpeciesMasterService.master_fingerprint()
+
+    def ensure_species_master_current(self):
+        if getattr(self, "_species_master_fingerprint", None) != SpeciesMasterService.master_fingerprint():
+            self.load_species_master_lookup()
+
+    def find_species_matches(self, korean, scientific, prefer_scientific=False):
+        latin_matches = getattr(self, "species_scientific_lookup", {}).get(self.scientific_name_key(scientific), [])
+        if prefer_scientific:
+            return latin_matches
+        return self.species_name_lookup.get(korean, []) if korean else latin_matches
 
     def rebuild_lookups(self):
         self.project_lookup = {self.project_label(project): project for project in self.projects}
@@ -2561,6 +2611,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 return
 
     def refresh_generated_fields(self):
+        self.set_form_value("사업별 순번", self.project_sequence_for_form(False))
         media_type = self.get_form_value("미디어타입")
         media_code = MEDIA_TYPE_CODES.get(media_type, "")
         self.set_form_value("미디어코드", media_code)
@@ -2572,7 +2623,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
         taxon_code = self.get_form_value("분류코드")
         year = self.get_form_value("사업년도")
         order = self.get_form_value("순번")
-        no = self.get_form_value("NO.")
+        no = self.get_form_value("사업별 순번")
         if organization_code and media_code and taxon_code and year and order and no:
             year_text = str(year)[-2:].zfill(2)
             self.set_form_value(
@@ -2585,6 +2636,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
     def add_data_row_from_form(self):
         self.set_form_value("NO.", self.next_no_value())
         values = self.collect_form_values()
+        values = self.prepare_new_project_number(values, False)
         if not self.validate_form_values(values):
             return
         values = self.prepare_media_for_record(values)
@@ -2633,17 +2685,21 @@ html, body, #map {{ height: 100%; margin: 0; }}
     def on_data_table_item_changed(self, item: QTableWidgetItem):
         if self.autosave_suspended:
             return
+        column_name = ROW_COLUMNS[item.column()]
+        if column_name in {"사업년도", "순번"}:
+            self.recalculate_project_sequences(self.data_table, ROW_COLUMNS)
+        if column_name == "데이터베이스번호":
+            self.mark_database_number_manual(self.data_table, item)
         if item.column() == ROW_COLUMNS.index("NO."):
             self.renumber_rows_below(item.row())
         if ROW_COLUMNS[item.column()] in {"위도", "경도"}:
             self.revalidate_row_location(self.data_table, ROW_COLUMNS, item.row())
         if item.row() == self.current_data_row():
             self.load_selected_row_to_form()
-            column_name = ROW_COLUMNS[item.column()]
-            if column_name == "국명":
+            if column_name in {"국명", "학명"}:
                 # 표에서 국명 셀을 직접 고쳤을 때도 폼에서 편집할 때와 동일하게
                 # 학명/종고유ID를 조회해서 채우고, 그 결과를 다시 표에 반영
-                self.fill_species_from_korean_name()
+                self.fill_species_from_korean_name(prefer_scientific=column_name == "학명")
                 self.write_data_row(item.row(), self.collect_form_values())
             elif column_name in DATE_FIELDS:
                 self.normalize_date_field(column_name)
@@ -2706,6 +2762,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
             "사업명",
             "사업년도",
             "순번",
+            "사업별 순번",
             "기관명",
             "기관코드",
             "국명",
@@ -2735,22 +2792,25 @@ html, body, #map {{ height: 100%; margin: 0; }}
             max_no = max(max_no, self.safe_sort_int(item.text() if item else 0))
         return max_no + 1
 
-    def fill_species_from_korean_name(self):
+    def fill_species_from_korean_name(self, prefer_scientific=False):
+        self.ensure_species_master_current()
         korean_name = normalize_text(self.get_form_value("국명"))
-        if not korean_name:
+        scientific_input = normalize_text(self.get_form_value("학명"))
+        if not korean_name and not scientific_input:
             self.set_species_status("")
             return
 
-        if not self.species_name_lookup:
+        if self.species_master_df.empty:
             self.set_species_status("종정보 마스터 없음")
             return
 
-        matches = self.species_name_lookup.get(korean_name, [])
+        matches = self.find_species_matches(korean_name, scientific_input, prefer_scientific)
         if not matches:
             self.set_species_status("마스터 매칭 없음")
             return
 
         match = matches[0]
+        self.set_form_value("국명", normalize_text(match.get("국명")))
         scientific_name = normalize_text(match.get("학명"))
         species_id = self.clean_master_value(match.get("종고유ID"))
         if species_id in {"", "0"}:
@@ -2804,6 +2864,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
         self, table: QTableWidget, row_columns: list[str], widgets: dict[str, Any], status_setter, after_change
     ):
         """설정 창에서 선택한 종정보/사업/미디어를 전체 행에 적용."""
+        self.ensure_species_master_current()
         row_count = table.rowCount()
         if row_count == 0:
             QMessageBox.information(self, "종ID·사업 일괄 적용", "적용할 행이 없습니다.")
@@ -2816,6 +2877,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
         options = dialog.values()
         project = options["project"]
         media_type = options["media_type"]
+        taxon_code = options.get("taxon_code", "")
 
         scientific_lookup: dict[str, dict[str, Any]] = {}
         for record in self.species_master_df.to_dict("records") if not self.species_master_df.empty else []:
@@ -2833,6 +2895,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
             table.setItem(row, col[name], QTableWidgetItem("" if value is None else str(value)))
 
         matched = unmatched = 0
+        project_counts = {}
         was_blocked = table.blockSignals(True)
         table.setUpdatesEnabled(False)
         try:
@@ -2845,9 +2908,14 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 if media_type:
                     put(row, "미디어타입", media_type)
                     put(row, "미디어코드", MEDIA_TYPE_CODES[media_type])
+                if taxon_code:
+                    put(row, "분류코드", taxon_code)
+                group = (cell(row, "사업년도"), cell(row, "순번"))
+                project_counts[group] = project_counts.get(group, 0) + 1
+                put(row, "사업별 순번", project_counts[group])
 
-                if (project or media_type) and not (options.get("preserve_database_numbers", True) and cell(row, "데이터베이스번호")):
-                    parts = [cell(row, name) for name in ("기관코드", "분류코드", "사업년도", "순번", "NO.")]
+                if (project or media_type or taxon_code) and not (options.get("preserve_database_numbers", True) and cell(row, "데이터베이스번호")):
+                    parts = [cell(row, name) for name in ("기관코드", "분류코드", "사업년도", "순번", "사업별 순번")]
                     code = cell(row, "미디어코드") if "미디어코드" in col else "SP"
                     number = ""
                     if all(parts) and code:
@@ -3583,9 +3651,15 @@ html, body, #map {{ height: 100%; margin: 0; }}
         try:
             for col, column_name in enumerate(ROW_COLUMNS):
                 value = values.get(column_name, "")
-                self.data_table.setItem(row, col, QTableWidgetItem("" if value is None else str(value)))
+                item = QTableWidgetItem("" if value is None else str(value))
+                if column_name == "데이터베이스번호":
+                    item.setData(DB_NUMBER_MANUAL_ROLE, bool(values.get("_database_number_manual")))
+                self.data_table.setItem(row, col, item)
         finally:
             self.data_table.blockSignals(was_blocked)
+
+        if not self.autosave_suspended:
+            self.recalculate_project_sequences(self.data_table, ROW_COLUMNS)
 
     def current_data_row(self) -> int | None:
         indexes = self.data_table.selectedIndexes()
@@ -3598,9 +3672,58 @@ html, body, #map {{ height: 100%; margin: 0; }}
     def preserve_row_database_number(self, table, columns, row, values):
         if self.preserve_database_numbers.isChecked():
             item = table.item(row, columns.index("데이터베이스번호"))
-            if item and item.text().strip():
+            if item and (item.text().strip() or item.data(DB_NUMBER_MANUAL_ROLE)):
                 values = dict(values)
                 values["데이터베이스번호"] = item.text()
+                values["_database_number_manual"] = bool(item.data(DB_NUMBER_MANUAL_ROLE))
+        return values
+
+    def project_sequence_for_form(self, specimen, new=False):
+        widgets = self.specimen_form_widgets if specimen else self.form_widgets
+        if not all(field in widgets for field in ("사업년도", "순번")):
+            return 1
+        name = "specimen_data_table" if specimen else "data_table"
+        if not hasattr(self, name):
+            return 1
+        table = getattr(self, name)
+        columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
+        group = tuple(str(self.get_form_value(field, widgets)) for field in ("사업년도", "순번"))
+        selected = None if new else (self.current_specimen_data_row() if specimen else self.current_data_row())
+        count = 0
+        for row in range(table.rowCount() if selected is None else selected):
+            key = tuple(table.item(row, columns.index(field)).text().strip() if table.item(row, columns.index(field)) else ""
+                        for field in ("사업년도", "순번"))
+            if key == group:
+                count += 1
+        return count + 1
+
+    def recalculate_project_sequences(self, table, columns):
+        if "사업별 순번" not in columns:
+            return
+        counts = {}
+        blocked = table.blockSignals(True)
+        try:
+            for row in range(table.rowCount()):
+                group = tuple(table.item(row, columns.index(field)).text().strip() if table.item(row, columns.index(field)) else ""
+                              for field in ("사업년도", "순번"))
+                counts[group] = counts.get(group, 0) + 1
+                value = str(counts[group]) if all(group) else ""
+                index = columns.index("사업별 순번")
+                item = table.item(row, index)
+                if item is None or item.text() != value:
+                    table.setItem(row, index, QTableWidgetItem(value))
+        finally:
+            table.blockSignals(blocked)
+
+    def prepare_new_project_number(self, values, specimen):
+        values = dict(values)
+        sequence = self.project_sequence_for_form(specimen, new=True)
+        values["사업별 순번"] = str(sequence)
+        media = "SP" if specimen else MEDIA_TYPE_CODES.get(values.get("미디어타입"), "")
+        fields = [values.get(field) for field in ("기관코드", "분류코드", "사업년도", "순번")]
+        if all(fields) and media:
+            org, taxon, year, order = fields
+            values["데이터베이스번호"] = f"{org}-{media}-{taxon}-{int(year) % 100:02d}{int(order):02d}{sequence:05d}"
         return values
 
     def restore_existing_database_number(self, specimen):
@@ -3615,11 +3738,182 @@ html, body, #map {{ height: 100%; margin: 0; }}
             return False
         columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
         item = table.item(row, columns.index("데이터베이스번호"))
-        if not item or not item.text().strip():
+        if not item or not (item.text().strip() or item.data(DB_NUMBER_MANUAL_ROLE)):
             return False
         widgets = self.specimen_form_widgets if specimen else self.form_widgets
         self.set_form_value("데이터베이스번호", item.text(), widgets)
         return True
+
+    @staticmethod
+    def mark_database_number_manual(table, item):
+        blocked = table.blockSignals(True)
+        item.setData(DB_NUMBER_MANUAL_ROLE, True)
+        table.blockSignals(blocked)
+
+    def edit_database_number(self, specimen):
+        table = self.specimen_data_table if specimen else self.data_table
+        columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
+        widgets = self.specimen_form_widgets if specimen else self.form_widgets
+        row = self.current_specimen_data_row() if specimen else self.current_data_row()
+        if row is None:
+            return
+        value = self.get_form_value("데이터베이스번호", widgets)
+        item = QTableWidgetItem(value)
+        item.setData(DB_NUMBER_MANUAL_ROLE, True)
+        blocked = table.blockSignals(True)
+        table.setItem(row, columns.index("데이터베이스번호"), item)
+        table.blockSignals(blocked)
+        (self.autosave_specimen_draft if specimen else self.autosave_draft)()
+
+    def _database_number_rule(self, table, columns, row, specimen):
+        def cell(name):
+            item = table.item(row, columns.index(name))
+            return item.text().strip() if item else ""
+
+        org, taxon, year, order, sequence = [
+            cell(field) for field in ("기관코드", "분류코드", "사업년도", "순번", "사업별 순번")
+        ]
+        media = "SP" if specimen else MEDIA_TYPE_CODES.get(cell("미디어타입"), cell("미디어코드"))
+        missing = [
+            label
+            for label, value in (
+                ("기관코드", org),
+                ("분류코드", taxon),
+                ("미디어타입", media),
+                ("사업년도", year),
+                ("순번", order),
+                ("사업별 순번", sequence),
+            )
+            if not value
+        ]
+        if missing:
+            return None, None, f"필수값 누락: {', '.join(missing)}"
+        try:
+            year_code = int(year) % 100
+            order_code = int(order)
+            sequence_code = int(sequence)
+            if order_code < 0 or sequence_code < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return None, None, "사업년도·순번·사업별 순번이 올바른 숫자가 아님"
+
+        prefix = f"{org}-{media}-{taxon}-{year_code:02d}{order_code:02d}"
+        expected = f"{prefix}{sequence_code:05d}"
+        pattern = re.compile(rf"{re.escape(prefix)}\d{{5}}")
+        return expected, pattern, ""
+
+    def repair_invalid_database_numbers(self):
+        specimen = self.tabs.currentIndex() == 1
+        if self.tabs.currentIndex() not in (0, 1):
+            QMessageBox.information(self, "DB 번호 검사", "관찰 정보작성 또는 표본정보 작성 탭에서 실행해 주세요.")
+            return
+        table = self.specimen_data_table if specimen else self.data_table
+        columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
+        if table.rowCount() == 0:
+            QMessageBox.information(self, "DB 번호 검사", "검사할 데이터가 없습니다.")
+            return
+
+        selected_row = self.current_specimen_data_row() if specimen else self.current_data_row()
+        if selected_row is not None:
+            (self.sync_current_specimen_form_to_table if specimen else self.sync_current_form_to_table)()
+        self.recalculate_project_sequences(table, columns)
+
+        db_column = columns.index("데이터베이스번호")
+        numbers = []
+        for row in range(table.rowCount()):
+            item = table.item(row, db_column)
+            numbers.append(item.text().strip() if item else "")
+
+        changes = []
+        failures = []
+        valid_count = 0
+        seen_numbers = set()
+        blocked = table.blockSignals(True)
+        try:
+            for row in range(table.rowCount()):
+                old_number = numbers[row]
+                expected, pattern, error = self._database_number_rule(table, columns, row, specimen)
+                duplicate = bool(old_number and old_number in seen_numbers)
+                if old_number:
+                    seen_numbers.add(old_number)
+
+                if pattern is not None and pattern.fullmatch(old_number) and not duplicate:
+                    valid_count += 1
+                    continue
+
+                reason = "번호 없음" if not old_number else ("중복 번호" if duplicate else "번호 형식 또는 행 정보와 불일치")
+                if error:
+                    failures.append((row + 1, old_number, f"{reason}; {error}"))
+                    continue
+                if expected in seen_numbers:
+                    failures.append((row + 1, old_number, f"{reason}; 생성할 번호 {expected}가 이미 존재함"))
+                    continue
+
+                new_item = QTableWidgetItem(expected)
+                new_item.setData(DB_NUMBER_MANUAL_ROLE, False)
+                table.setItem(row, db_column, new_item)
+                seen_numbers.add(expected)
+                changes.append((row + 1, old_number, expected, reason))
+        finally:
+            table.blockSignals(blocked)
+
+        if selected_row is not None:
+            (self.load_selected_specimen_row_to_form if specimen else self.load_selected_row_to_form)()
+        if changes:
+            (self.autosave_specimen_draft if specimen else self.autosave_draft)()
+        self.show_database_number_repair_log(
+            "표본" if specimen else "관찰", valid_count, changes, failures
+        )
+
+    def show_database_number_repair_log(self, data_type, valid_count, changes, failures):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{data_type} DB 번호 검사 결과")
+        dialog.resize(980, 520)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            f"정상 {valid_count}건 · 수정 {len(changes)}건 · 수정 불가 {len(failures)}건"
+        ))
+
+        result_table = QTableWidget(len(changes) + len(failures), 5, dialog)
+        result_table.setHorizontalHeaderLabels(["결과", "행", "변경 전", "변경 후", "사유"])
+        result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        result_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        result_table.verticalHeader().setVisible(False)
+        entries = [
+            ("수정", row, old or "(빈 값)", new, reason)
+            for row, old, new, reason in changes
+        ] + [
+            ("수정 불가", row, old or "(빈 값)", "-", reason)
+            for row, old, reason in failures
+        ]
+        for row_index, entry in enumerate(entries):
+            for column_index, value in enumerate(entry):
+                result_table.setItem(row_index, column_index, QTableWidgetItem(str(value)))
+        header = result_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        layout.addWidget(result_table)
+
+        button_layout = QHBoxLayout()
+        copy_button = QPushButton("결과 복사")
+        close_button = QPushButton("닫기")
+        copy_button.clicked.connect(lambda: QApplication.clipboard().setText("\n".join(
+            "\t".join(map(str, entry)) for entry in entries
+        )))
+        close_button.clicked.connect(dialog.accept)
+        button_layout.addStretch()
+        button_layout.addWidget(copy_button)
+        button_layout.addWidget(close_button)
+        layout.addLayout(button_layout)
+        dialog.exec()
+
+    def regenerate_selected_database_number(self):
+        """이전 호출 경로와의 호환을 위해 전체 검사 기능으로 연결한다."""
+        self.repair_invalid_database_numbers()
+        (self.autosave_specimen_draft if specimen else self.autosave_draft)()
 
     def paste_clipboard_into_table(self):
         text = QApplication.clipboard().text()
@@ -4079,6 +4373,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
             table.setItem(row, col, QTableWidgetItem("" if value is None else str(value)))
 
     def table_to_records(self, table: QTableWidget, columns: list[str]) -> list[dict[str, Any]]:
+        self.recalculate_project_sequences(table, columns)
         records = []
         for row in range(table.rowCount()):
             record = {}
@@ -4089,6 +4384,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 if column_name in {"NO.", "사업년도", "순번", "관찰개체수"} and value:
                     value = self.safe_int(value)
                 record[column_name] = value
+                if column_name == "데이터베이스번호" and item and item.data(DB_NUMBER_MANUAL_ROLE):
+                    record["_database_number_manual"] = True
                 has_value = has_value or bool(value)
             if has_value:
                 records.append(record)

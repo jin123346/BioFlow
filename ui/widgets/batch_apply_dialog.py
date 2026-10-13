@@ -19,6 +19,10 @@ class BatchApplyDialog(QDialog):
         self.preserve_numbers.setChecked(True)
         form.addRow("번호 생성", self.preserve_numbers)
         form.addRow("종ID·학명", self.species)
+        self.taxon = QComboBox()
+        self.taxon.addItem("기존 값 유지", "")
+        self.taxon.addItems(["IN", "PL", "BI", "PI", "MM", "SP", "MR", "AR", "AM", "SW", "AG"])
+        form.addRow("분류코드", self.taxon)
         self.year = QComboBox()
         years = sorted({str(p.get("사업년도", "")) for p in projects if p.get("사업년도")}, reverse=True)
         self.year.addItem("전체 사업년도", "")
@@ -58,6 +62,7 @@ class BatchApplyDialog(QDialog):
     def values(self):
         return {
             "species": self.species.isChecked(),
+            "taxon_code": self.taxon.currentData() or (self.taxon.currentText() if self.taxon.currentIndex() else ""),
             "preserve_database_numbers": self.preserve_numbers.isChecked(),
             "project": self.project.currentData(),
             "media_type": self.media.currentData() if self.media_codes else "",
@@ -65,7 +70,7 @@ class BatchApplyDialog(QDialog):
 
     def accept(self):
         values = self.values()
-        if not (values["species"] or values["project"] or values["media_type"]):
+        if not (values["species"] or values["project"] or values["media_type"] or values["taxon_code"]):
             QMessageBox.warning(self, "일괄 적용", "적용할 항목을 선택해 주세요.")
             return
         super().accept()

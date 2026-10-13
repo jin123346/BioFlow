@@ -18,6 +18,16 @@ from config.paths import (
 from utils.text_utils import normalize_text
 
 class SpeciesMasterService:
+    @staticmethod
+    def master_fingerprint():
+        def stamp(path):
+            try:
+                stat = path.stat()
+                return stat.st_mtime_ns, stat.st_size
+            except OSError:
+                return None
+        return stamp(MASTER_FILE_PATH), stamp(MASTER_CACHE_FILE)
+
     def load_excel_file(self, file_path: str) -> pd.DataFrame:
         df = pd.read_excel(file_path, header=1)
 
@@ -43,7 +53,8 @@ class SpeciesMasterService:
 
     def load_last_master(self) -> pd.DataFrame:
         if MASTER_CACHE_FILE.exists():
-            return pd.read_pickle(MASTER_CACHE_FILE)
+            if not MASTER_FILE_PATH.exists() or MASTER_CACHE_FILE.stat().st_mtime_ns >= MASTER_FILE_PATH.stat().st_mtime_ns:
+                return pd.read_pickle(MASTER_CACHE_FILE)
 
         if MASTER_FILE_PATH.exists():
             return self.load_master_from_excel()

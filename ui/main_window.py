@@ -74,9 +74,12 @@ class MainWindow(QMainWindow):
             if index == 1:
                 from ui.tabs.species_master_tab import SpeciesMasterTab
                 page = SpeciesMasterTab()
+                page.master_changed.connect(self.refresh_species_consumers)
             elif index == 2:
                 from ui.tabs.upload_tab import UploadTab
                 page = UploadTab()
+                if getattr(self, "_active_master_df", None) is not None:
+                    page.load_species_master_lookup(self._active_master_df)
             elif index == 3:
                 from ui.tabs.species_review_tab import SpeciesReviewTab
                 page = SpeciesReviewTab(self.upload_tab)
@@ -92,6 +95,15 @@ class MainWindow(QMainWindow):
     def show_page(self, index):
         if index >= 0:
             self.pages.setCurrentWidget(self.ensure_page(index))
+
+    def refresh_species_consumers(self, dataframe):
+        self._active_master_df = dataframe
+        editor = self._loaded_pages.get(2)
+        if editor is not None:
+            editor.load_species_master_lookup(dataframe)
+        review = self._loaded_pages.get(3)
+        if review is not None:
+            review._master_df = dataframe
 
     @property
     def master_tab(self):

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import QSettings, QTimer
+from PySide6.QtCore import QSettings, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -45,6 +45,7 @@ def populate_table_widget(table: QTableWidget, df: pd.DataFrame):
 
 
 class SpeciesMasterTab(QWidget):
+    master_changed = Signal(object)
     def __init__(self):
         super().__init__()
         self.df = None
@@ -260,6 +261,8 @@ class SpeciesMasterTab(QWidget):
 
             self.show_dataframe_preview(df)
 
+            self.master_changed.emit(df)
+
         except Exception as e:
             self.append_log(f"엑셀 로드 실패 : {str(e)}")
 
@@ -284,6 +287,7 @@ class SpeciesMasterTab(QWidget):
             self.append_log(f"백업 저장 성공 : {result['backup_path']}")
             self.append_log(f"버전 정보 저장 성공 : {result['version_path']}")
             self.refresh_version_info_label()
+            self.master_changed.emit(self.df)
         except Exception as e:
             self.append_log(f"로컬 저장 실패 : {str(e)}")
 
@@ -333,6 +337,7 @@ class SpeciesMasterTab(QWidget):
             self.df = df
             self.show_dataframe_preview(df)
             self.append_log("재로딩 완료")
+            self.master_changed.emit(df)
         except Exception as e:
             self.append_log(f"재로딩 실패: {str(e)}")
 

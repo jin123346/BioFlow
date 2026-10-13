@@ -270,11 +270,13 @@ class SpeciesReviewTab(QWidget):
             self.status_label.setText("선택 행을 수정했습니다.")
 
     def _ensure_master_loaded(self) -> pd.DataFrame:
-        if self._master_df is None:
+        fingerprint = SpeciesMasterService.master_fingerprint()
+        if self._master_df is None or getattr(self, "_master_fingerprint", fingerprint) != fingerprint:
             try:
                 self._master_df = self.master_service.load_last_master()
             except Exception:
                 self._master_df = pd.DataFrame()
+            self._master_fingerprint = SpeciesMasterService.master_fingerprint()
         return self._master_df
 
     def collect_unmatched_species(self):
