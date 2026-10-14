@@ -39,13 +39,23 @@ _app_version_data["version"] = APP_VERSION
 _app_version_data.setdefault("download_url", "https://github.com/jin123346/BioFlow/releases/latest")
 _app_version_path.write_text(json.dumps(_app_version_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-# Exclude local backups and in-progress drafts from distribution.
-seed_data = [
-    (str(path), str(path.parent))
-    for path in Path('data').rglob('*')
-    if path.is_file() and 'history' not in path.parts
-    and path.name not in {'new_data_draft.json', 'new_specimen_draft.json'}
-]
+# 배포본에는 실행에 필요한 기준자료만 명시적으로 포함한다. data/를 통째로 훑으면
+# 임시저장, 로컬 업데이트 이력, 컬럼 매핑 등 개발 PC의 사용자 상태가 새로 생겼을 때
+# 제외 목록에서 빠져 배포될 수 있으므로 허용 목록을 사용한다.
+_release_seed_files = (
+    'data/version.json',
+    'data/address/영문주소_정리.xlsx',
+    'data/classification/master.json',
+    'data/classification/version.json',
+    'data/institution/institution.json',
+    'data/master/species_master.xlsx',
+    'data/reference/organizations.json',
+    'data/reference/upload_projects.json',
+)
+_missing_seed_files = [path for path in _release_seed_files if not Path(path).is_file()]
+if _missing_seed_files:
+    raise FileNotFoundError(f"Missing release seed files: {_missing_seed_files}")
+seed_data = [(path, str(Path(path).parent)) for path in _release_seed_files]
 
 a = Analysis(
     ['app.py'],

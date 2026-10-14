@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QProgressDialog,
     QPushButton,
@@ -49,7 +50,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config.paths import DATA_DIR
+from config.paths import DATA_DIR, DRAFT_DIR, SETTINGS_DIR
 from services.address_master_service import AddressMasterService
 from ui.widgets.recent_file_dialog import RecentFileDialog as QFileDialog
 from services.species_master_service import SpeciesMasterService
@@ -109,8 +110,8 @@ def parse_excel_sheet(workbook, sheet_name):
 REFERENCE_DIR = DATA_DIR / "reference"
 PROJECTS_FILE = REFERENCE_DIR / "upload_projects.json"
 ORGANIZATIONS_FILE = REFERENCE_DIR / "organizations.json"
-DRAFT_FILE = REFERENCE_DIR / "new_data_draft.json"
-COLUMN_MAPPINGS_FILE = REFERENCE_DIR / "excel_column_mappings.json"
+DRAFT_FILE = DRAFT_DIR / "new_data_draft.json"
+COLUMN_MAPPINGS_FILE = SETTINGS_DIR / "excel_column_mappings.json"
 
 ROW_COLUMNS = [
     "NO.",
@@ -292,7 +293,7 @@ MEDIA_EXTENSION_TYPES = {
 AUTO_FIELDS = {"사업별 순번", "NO.", "미디어코드", "사업년도", "순번", "기관코드", "데이터베이스번호"}
 DEFAULT_ORGANIZATION_NAME = "국립중앙과학관"
 
-SPECIMEN_DRAFT_FILE = REFERENCE_DIR / "new_specimen_draft.json"
+SPECIMEN_DRAFT_FILE = DRAFT_DIR / "new_specimen_draft.json"
 
 # 표본은 관찰과 달리 미디어타입 구분 없이 이미지 등록만 지원하고,
 # 데이터베이스번호도 미디어코드 없이 "SP" 고정값을 사용 (기관코드-SP-분류코드-연도순번No)
@@ -799,10 +800,6 @@ class UploadTab(QWidget):
         self.preserve_database_numbers = QCheckBox("기존 데이터베이스번호 유지 (해제하면 새 번호 생성)")
         self.preserve_database_numbers.setChecked(True)
         main_layout.addWidget(self.preserve_database_numbers)
-        regenerate_button = QPushButton("DB 번호 오류 검사 및 수정")
-        regenerate_button.setToolTip("현재 관찰/표본 탭의 DB 번호를 모두 검사하고 형식이 맞지 않는 번호만 수정합니다.")
-        regenerate_button.clicked.connect(self.repair_invalid_database_numbers)
-        main_layout.addWidget(regenerate_button)
 
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
@@ -834,6 +831,7 @@ class UploadTab(QWidget):
         map_button.clicked.connect(self.open_location_on_map)
         self.species_status_label = QLabel("")
         self.configure_status_label(self.species_status_label)
+        self.species_status_label.hide()
 
         control_layout.addWidget(new_form_button)
         control_layout.addWidget(import_folder_button)
@@ -926,6 +924,7 @@ class UploadTab(QWidget):
         species_project_all_button.clicked.connect(self.fill_all_species_and_project)
         map_all_button = QPushButton("전체 위치 지도 확인")
         map_all_button.clicked.connect(self.open_all_locations_on_map)
+        validate_button = self.create_validation_button(self.data_table, ROW_COLUMNS)
         clear_button = QPushButton("작성 내용 비우기")
         clear_button.clicked.connect(self.clear_data_rows)
         self.save_status_label = QLabel("")
@@ -939,6 +938,7 @@ class UploadTab(QWidget):
         save_layout.addWidget(thumbnail_button)
         save_layout.addWidget(species_project_all_button)
         save_layout.addWidget(address_all_button)
+        save_layout.addWidget(validate_button)
         save_layout.addWidget(map_all_button)
         save_layout.addWidget(clear_button)
         layout.addLayout(save_layout)
@@ -1154,6 +1154,7 @@ class UploadTab(QWidget):
         map_button.clicked.connect(self.open_specimen_location_on_map)
         self.specimen_species_status_label = QLabel("")
         self.configure_status_label(self.specimen_species_status_label)
+        self.specimen_species_status_label.hide()
 
         control_layout.addWidget(new_form_button)
         control_layout.addWidget(import_folder_button)
@@ -1237,6 +1238,7 @@ class UploadTab(QWidget):
         species_project_all_button.clicked.connect(self.fill_all_specimen_species_and_project)
         map_all_button = QPushButton("전체 위치 지도 확인")
         map_all_button.clicked.connect(self.open_all_specimen_locations_on_map)
+        validate_button = self.create_validation_button(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         clear_button = QPushButton("작성 내용 비우기")
         clear_button.clicked.connect(self.clear_specimen_data_rows)
         self.specimen_save_status_label = QLabel("")
@@ -1249,6 +1251,7 @@ class UploadTab(QWidget):
         save_layout.addWidget(import_button)
         save_layout.addWidget(species_project_all_button)
         save_layout.addWidget(address_all_button)
+        save_layout.addWidget(validate_button)
         save_layout.addWidget(map_all_button)
         save_layout.addWidget(clear_button)
         layout.addLayout(save_layout)
@@ -1502,6 +1505,8 @@ class UploadTab(QWidget):
             latitude = UploadTab.to_float(lat_item.text() if lat_item else "")
             longitude = UploadTab.to_float(lon_item.text() if lon_item else "")
             if latitude is None or longitude is None:
+                continue
+            if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
                 continue
 
             no_item = table.item(row, no_col)
@@ -2416,6 +2421,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
     def set_specimen_species_status(self, message: str):
         if hasattr(self, "specimen_species_status_label"):
             self.specimen_species_status_label.setText(message)
+            self.specimen_species_status_label.setVisible(bool(message.strip()))
 
     def set_specimen_save_status(self, message: str):
         if hasattr(self, "specimen_save_status_label"):
@@ -3564,18 +3570,81 @@ html, body, #map {{ height: 100%; margin: 0; }}
         longitude = UploadTab.to_float(lon_text)
         if latitude is None or longitude is None:
             return "위도/경도가 숫자가 아님"
-        if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
-            return "위도/경도 범위 오류 (위도 -90~90, 경도 -180~180)"
-
         lat_min, lat_max = KOREA_LAT_RANGE
         lon_min, lon_max = KOREA_LON_RANGE
         in_korea = lat_min <= latitude <= lat_max and lon_min <= longitude <= lon_max
         looks_swapped = lat_min <= longitude <= lat_max and lon_min <= latitude <= lon_max
         if not in_korea and looks_swapped:
             return "위도/경도가 뒤바뀐 것 같습니다"
+        if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            return "위도/경도 범위 오류 (위도 -90~90, 경도 -180~180)"
+        if latitude == 0 or longitude == 0:
+            return "0 좌표: 미입력 대체값 또는 실제 위치인지 확인 필요"
         if not in_korea:
             return "국내 범위를 벗어남 (해외 건이면 무시해도 됩니다)"
         return ""
+
+    def create_validation_button(self, table: QTableWidget, row_columns: list[str]) -> QPushButton:
+        button = QPushButton("데이터 검사")
+        button.setToolTip("현재 탭의 전체 데이터에서 검사할 항목을 선택합니다.")
+        menu = QMenu(button)
+        number_action = menu.addAction("DB 번호 오류 검사 및 수정")
+        number_action.triggered.connect(self.repair_invalid_database_numbers)
+        location_action = menu.addAction("좌표 검사")
+        location_action.triggered.connect(lambda: self.show_location_validation(table, row_columns))
+        button.setMenu(menu)
+        return button
+
+    def show_location_validation(self, table: QTableWidget, row_columns: list[str]):
+        self.refresh_location_validation(table, row_columns)
+        issues = self.location_validation_issues(table, row_columns)
+        if not issues:
+            QMessageBox.information(self, "좌표 검사", "입력된 좌표에서 형식·범위 이상을 찾지 못했습니다.\n좌표가 모두 비어 있는 행은 검사에서 제외합니다.\n실제 관찰 위치와 일치하는지는 지도에서 확인해 주세요.")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("좌표 검사 결과")
+        dialog.resize(900, 480)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(f"확인 필요 {len(issues)}건 · 결과를 더블클릭하면 해당 행으로 이동합니다.\n해외 좌표는 국내 범위 경고를 무시할 수 있습니다. 좌표는 자동 수정하지 않습니다."))
+        results = QTableWidget(len(issues), 5, dialog)
+        results.setHorizontalHeaderLabels(["행", "NO.", "위도", "경도", "확인 사유"])
+        results.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        results.setSelectionBehavior(QAbstractItemView.SelectRows)
+        entries = []
+        for index, (row, label, message) in enumerate(issues):
+            coordinates = []
+            for field in ("위도", "경도"):
+                item = table.item(row, row_columns.index(field))
+                coordinates.append(item.text() if item else "")
+            entry = (str(row + 1), label, *coordinates, message)
+            entries.append(entry)
+            for column, value in enumerate(entry):
+                results.setItem(index, column, QTableWidgetItem(value))
+        results.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        results.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        layout.addWidget(results)
+
+        def jump_to_row(index, _column):
+            row = issues[index][0]
+            table.setCurrentCell(row, row_columns.index("위도"))
+            table.selectRow(row)
+            table.scrollToItem(table.item(row, row_columns.index("위도")))
+            dialog.accept()
+            table.setFocus()
+
+        results.cellDoubleClicked.connect(jump_to_row)
+        buttons = QHBoxLayout()
+        copy_button = QPushButton("결과 복사")
+        copy_button.clicked.connect(lambda: QApplication.clipboard().setText(
+            "행\tNO.\t위도\t경도\t확인 사유\n" + "\n".join("\t".join(entry) for entry in entries)
+        ))
+        close_button = QPushButton("닫기")
+        close_button.clicked.connect(dialog.accept)
+        buttons.addStretch()
+        buttons.addWidget(copy_button)
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+        dialog.exec()
 
     def location_validation_issues(self, table: QTableWidget, row_columns: list[str]) -> list[tuple[int, str, str]]:
         lat_col = row_columns.index("위도")
@@ -4490,6 +4559,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
     def set_species_status(self, message: str):
         if hasattr(self, "species_status_label"):
             self.species_status_label.setText(message)
+            self.species_status_label.setVisible(bool(message.strip()))
 
     def set_save_status(self, message: str):
         if hasattr(self, "save_status_label"):

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from config.paths import (
-    DATA_DIR,
+    DRAFT_DIR,
     HISTORY_DIR,
     LOCAL_VERSION_FILE_PATH,
     LOCAL_VERSION_HISTORY_FILE_PATH,
@@ -24,10 +24,9 @@ from config.paths import (
 )
 from services.data_update_service import LOCAL_VERSION_FILE
 
-REFERENCE_DIR = DATA_DIR / "reference"
 DRAFT_TARGETS = [
-    ("관찰 정보 작성 (신규 데이터)", REFERENCE_DIR / "new_data_draft.json"),
-    ("표본정보 작성 (신규 데이터)", REFERENCE_DIR / "new_specimen_draft.json"),
+    ("관찰 정보 작성 (신규 데이터)", DRAFT_DIR / "new_data_draft.json"),
+    ("표본정보 작성 (신규 데이터)", DRAFT_DIR / "new_specimen_draft.json"),
 ]
 
 
