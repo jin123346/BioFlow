@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import tempfile
 import time
 import urllib.request
@@ -80,6 +81,19 @@ def check_for_update() -> dict[str, Any] | None:
     return remote
 
 
+def is_newer_app_version(remote_version: str, local_version: str) -> bool:
+    """Compare numeric release components; unknown formats must not trigger alerts."""
+    def parse(value):
+        match = re.fullmatch(r"[vV]?(\d+(?:\.\d+)*)", str(value).strip())
+        return tuple(int(part) for part in match.group(1).split(".")) if match else None
+
+    remote, local = parse(remote_version), parse(local_version)
+    if remote is None or local is None:
+        return False
+    width = max(len(remote), len(local))
+    return remote + (0,) * (width - len(remote)) > local + (0,) * (width - len(local))
+
+
 def check_for_app_update(local_version: str) -> dict[str, Any] | None:
     """앱(exe) 자체의 새 릴리즈가 있는지 원격 app_version.json으로 확인.
     exe는 실행 중인 자기 자신을 못 바꿔치기하므로, 여기선 새 버전 유무와 다운로드 페이지
@@ -90,9 +104,12 @@ def check_for_app_update(local_version: str) -> dict[str, Any] | None:
         logger.info("check_for_app_update: 원격 app_version.json 조회 실패 - %s", exc)
         return None
 
+    if not isinstance(remote, dict):
+        logger.info("check_for_app_update: 잘못된 원격 버전 정보 형식")
+        return None
     remote_version = str(remote.get("version", ""))
     logger.info("check_for_app_update: remote=%r local=%r", remote_version, local_version)
-    if not remote_version or not local_version or remote_version == local_version:
+    if not is_newer_app_version(remote_version, local_version):
         return None
     remote.setdefault("download_url", DEFAULT_DOWNLOAD_URL)
     return remote

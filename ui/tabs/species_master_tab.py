@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMessageBox,
     QPushButton,
     QTabWidget,
@@ -23,10 +22,7 @@ from config.paths import LOCAL_VERSION_FILE_PATH, MASTER_FILE_PATH
 from services.data_update_service import LOCAL_VERSION_FILE
 from ui.widgets.recent_file_dialog import RecentFileDialog as QFileDialog
 from services.species_master_service import SpeciesMasterService
-from services.species_compare_service import SpeciesCompareService
-from utils.excel_utils import find_target_sheet_name
 from utils.text_utils import normalize_text
-from config.constants import TARGET_SHEET_NAME
 
 
 def populate_table_widget(table: QTableWidget, df: pd.DataFrame):
@@ -49,14 +45,10 @@ class SpeciesMasterTab(QWidget):
     def __init__(self):
         super().__init__()
         self.df = None
-        self.update_files = []
-        self.df_candidates = None
-        self.df_compare_result = None
         self.status_label = None
         self.settings = QSettings("Bioflow", "BioflowApp")
 
         self.master_service = SpeciesMasterService()
-        self.compare_service = SpeciesCompareService()
         
         self.init_ui()
         QTimer.singleShot(100, self.load_last_species_master)
@@ -101,46 +93,33 @@ class SpeciesMasterTab(QWidget):
         self.status_label.setStyleSheet("color: blue;")
         main_layout.addWidget(self.status_label)
 
+        action_layout = QHBoxLayout()
         self.load_button = QPushButton("엑셀 로드")
         self.load_button.clicked.connect(self.load_excel)
-        main_layout.addWidget(self.load_button)
-
-        self.preview_table = QTableWidget()
-        main_layout.addWidget(self.preview_table)
-
+        action_layout.addWidget(self.load_button)
         self.save_button = QPushButton("로컬 저장")
         self.save_button.clicked.connect(self.save_master_to_local)
-        main_layout.addWidget(self.save_button)
+        action_layout.addWidget(self.save_button)
+        action_layout.addStretch()
+        main_layout.addLayout(action_layout)
 
-        update_file_layout = QHBoxLayout()
+        self.preview_info_label = QLabel("종정보 마스터를 불러오면 목록이 표시됩니다.")
+        main_layout.addWidget(self.preview_info_label)
+        self.preview_table = QTableWidget()
+        main_layout.addWidget(self.preview_table, 1)
 
-        self.select_update_files_button = QPushButton("업데이트 파일 여러개 선택")
-        self.select_update_files_button.clicked.connect(self.select_update_files)
-
-        self.extract_candidates_button = QPushButton("업데이트 후보 추출")
-        self.extract_candidates_button.clicked.connect(self.extract_update_candidates)
-
-        self.compare_button = QPushButton("신규/업로드 분류")
-        self.compare_button.clicked.connect(self.compare_with_master)
-
-        self.save_compare_result_button = QPushButton("업데이트 엑셀 저장")
-        self.save_compare_result_button.clicked.connect(self.save_compare_result_to_excel)
-
-        update_file_layout.addWidget(self.select_update_files_button)
-        update_file_layout.addWidget(self.extract_candidates_button)
-        update_file_layout.addWidget(self.compare_button)
-        update_file_layout.addWidget(self.save_compare_result_button)
-        main_layout.addLayout(update_file_layout)
-
-        self.update_files_list = QListWidget()
-        main_layout.addWidget(self.update_files_list)
-
-        self.result_table = QTableWidget()
-        main_layout.addWidget(self.result_table)
-
+        self.log_toggle_button = QPushButton("작업 로그 보기")
+        self.log_toggle_button.setCheckable(True)
+        main_layout.addWidget(self.log_toggle_button)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.setMaximumHeight(100)
         self.log_text.setPlaceholderText("작업 로그가 여기에 표시됩니다.")
+        self.log_text.hide()
+        self.log_toggle_button.toggled.connect(self.log_text.setVisible)
+        self.log_toggle_button.toggled.connect(
+            lambda checked: self.log_toggle_button.setText("작업 로그 접기" if checked else "작업 로그 보기")
+        )
         main_layout.addWidget(self.log_text)
 
         return manage_widget
@@ -267,8 +246,9 @@ class SpeciesMasterTab(QWidget):
             self.append_log(f"엑셀 로드 실패 : {str(e)}")
 
     def show_dataframe_preview(self, df: pd.DataFrame):
-        populate_table_widget(self.preview_table, df.head(20))
-        self.append_log("미리보기 테이블 표시 완료(상위 20행)")
+        populate_table_widget(self.preview_table, df.head(200))
+        self.preview_info_label.setText(f"종정보 마스터 총 {len(df):,}건 · 상위 {min(len(df), 200):,}건 표시 · 상세 조회는 종 검색 탭에서 가능합니다.")
+        self.append_log("미리보기 테이블 표시 완료(최대 200행)")
 
     def save_master_to_local(self):
         if self.df is None:
@@ -340,124 +320,6 @@ class SpeciesMasterTab(QWidget):
             self.master_changed.emit(df)
         except Exception as e:
             self.append_log(f"재로딩 실패: {str(e)}")
-
-    # 아래 4개는 다음 단계에서 species_compare_service로 분리
-    def select_update_files(self):
-        file_paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "업데이트용 엑셀 파일 선택",
-            "",
-            "Excel Files (*.xlsx *.xls);;All Files (*)"
-        )
-
-        if file_paths:
-            self.update_files = file_paths
-            self.update_files_list.clear()
-
-            for path in file_paths:
-                self.update_files_list.addItem(path)
-            self.append_log(f"업데이트 파일 선택 완료 : {len(file_paths)}개 파일")
-        else:
-            self.append_log("업데이트 파일 선택이 취소되었습니다.")
-
-    def extract_update_candidates(self):
-        if not self.update_files:
-            self.append_log("업데이트할 파일을 먼저 선택해 주세요.")
-            return
-
-        all_rows = []
-
-        for file_path in self.update_files:
-            try:
-                actual_sheet_name = find_target_sheet_name(file_path, TARGET_SHEET_NAME)
-
-                if not actual_sheet_name:
-                    self.append_log(f"대상 시트를 찾지 못했습니다: {Path(file_path).name}")
-                    continue
-
-                df_sheet = pd.read_excel(file_path, sheet_name=actual_sheet_name)
-                df_sheet.columns = [str(col).strip().replace("\n", " ") for col in df_sheet.columns]
-
-                df_sheet["source_file"] = Path(file_path).name
-                df_sheet["source_path"] = file_path
-                df_sheet["update_type"] = range(2, len(df_sheet) + 2)
-
-                all_rows.append(df_sheet)
-                self.append_log(f"업데이트 후보 추출 성공 : {file_path} (행: {len(df_sheet)})")
-            except Exception as e:
-                self.append_log(f"업데이트 후보 추출 실패 : {file_path} - {str(e)}")
-
-        if not all_rows:
-            self.append_log("업데이트 후보로 추출된 데이터가 없습니다.")
-            return
-
-        self.df_candidates = pd.concat(all_rows, ignore_index=True)
-        self.append_log(f"업데이트 후보 통합 완료 : 총 {len(self.df_candidates)} 행")
-        self.show_dataframe_preview(self.df_candidates)
-
-    def show_result_preview(self, df: pd.DataFrame):
-        populate_table_widget(self.result_table, df)
-        self.append_log("비교 결과 테이블 표시 완료")
-
-    def save_compare_result_to_excel(self):
-        if self.df_compare_result is None or self.df_compare_result.empty:
-            self.append_log("저장할 비교 결과가 없습니다. 먼저 신규/업데이트 분류를 실행해 주세요.")
-            return
-
-        from datetime import datetime
-
-        default_name = f"species_compare_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "비교 결과 저장",
-            default_name,
-            "Excel Files (*.xlsx)"
-        )
-
-        if not file_path:
-            self.append_log("비교 결과 저장이 취소되었습니다.")
-            return
-
-        try:
-            save_df = self.df_compare_result.copy()
-
-            if "status" in save_df.columns:
-                status_order = {
-                    "신규": 0,
-                    "업데이트": 1,
-                    "업데이트(중복)": 2,
-                    "검토필요": 3,
-                    "식별정보부족": 4,
-                }
-                save_df["_status_order"] = save_df["status"].map(status_order).fillna(99)
-                save_df = save_df.sort_values(by=["_status_order"]).drop(columns=["_status_order"])
-
-            save_df.to_excel(file_path, index=False)
-            self.append_log(f"비교 결과 저장 완료: {file_path}")
-
-        except Exception as e:
-            self.append_log(f"비교 결과 저장 실패: {str(e)}")
-
-    def compare_with_master(self):
-        if self.df is None:
-            self.append_log("마스터 없음")
-            return
-
-        if self.df_candidates is None:
-            self.append_log("후보 없음")
-            return
-
-        result_df = self.compare_service.compare(self.df, self.df_candidates)
-
-        self.df_compare_result = result_df
-
-        self.append_log("비교 완료")
-        self.show_result_preview(result_df.head(50))
-
-
-
-
 
 # def normalize_sheet_name(name: str) -> str:
 #     if name is None:

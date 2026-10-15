@@ -57,10 +57,18 @@ if _missing_seed_files:
     raise FileNotFoundError(f"Missing release seed files: {_missing_seed_files}")
 seed_data = [(path, str(Path(path).parent)) for path in _release_seed_files]
 
+# Ship media tools so capture and video metadata work on PCs without ffmpeg in PATH.
+media_tool_binaries = []
+for tool_name in ('ffmpeg', 'ffprobe'):
+    tool_path = shutil.which(tool_name)
+    if not tool_path:
+        raise FileNotFoundError(f"Install {tool_name} before building the media-enabled release")
+    media_tool_binaries.append((tool_path, 'media_tools'))
+
 a = Analysis(
     ['app.py'],
     pathex=[],
-    binaries=[],
+    binaries=media_tool_binaries,
     datas=seed_data + [('assets', 'assets'), ('VERSION', '.')],
     hiddenimports=[],
     hookspath=[],

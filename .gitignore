@@ -42,6 +42,7 @@ Thumbs.db
 
 # 엑셀 파일 (절대 커밋 금지)
 *.xlsx
+!assets/excel/gbif.xlsx
 *.xls
 *.xlsm
 

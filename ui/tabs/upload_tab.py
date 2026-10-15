@@ -56,6 +56,8 @@ from ui.widgets.recent_file_dialog import RecentFileDialog as QFileDialog
 from services.species_master_service import SpeciesMasterService
 from services.map_preview_service import publish_map_preview
 from services.final_excel_service import write_final_template
+from services.gbif_excel_service import write_gbif_template
+from services.media_storage_service import copy_database_media, find_media_tool, media_destination
 from ui.widgets.column_mapping_dialog import ColumnMappingDialog, apply_mapping, auto_map
 from ui.widgets.batch_apply_dialog import BatchApplyDialog
 from utils.text_utils import normalize_text
@@ -848,12 +850,13 @@ class UploadTab(QWidget):
         self.media_storage_path_input = QLineEdit()
         self.media_storage_path_input.setReadOnly(True)
         self.media_storage_path_input.setPlaceholderText("미디어 파일을 DB번호 이름으로 저장할 폴더")
-        media_storage_button = QPushButton("미디어 저장 위치 선택")
+        media_storage_button = QPushButton("이미지·동영상·사운드 저장 위치 선택")
         media_storage_button.clicked.connect(self.select_media_storage_dir)
         media_storage_layout.addWidget(QLabel("미디어 저장 위치"))
         media_storage_layout.addWidget(self.media_storage_path_input, 1)
         media_storage_layout.addWidget(media_storage_button)
         layout.addLayout(media_storage_layout)
+        layout.addWidget(QLabel("엑셀 저장 시 미디어가 있으면 저장 폴더를 다시 선택합니다. 동영상·캡처만 종고유ID 하위 폴더에 저장합니다."))
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -916,7 +919,7 @@ class UploadTab(QWidget):
         export_button.clicked.connect(self.export_rows_to_excel)
         import_button = QPushButton("엑셀 불러오기")
         import_button.clicked.connect(self.load_rows_from_excel)
-        thumbnail_button = QPushButton("동영상 캡처 이미지 생성")
+        thumbnail_button = QPushButton("동영상 미리보기 생성")
         thumbnail_button.clicked.connect(self.generate_video_thumbnails)
         address_all_button = QPushButton("위치 전체 주소 조회")
         address_all_button.clicked.connect(self.fill_all_addresses_from_latlon)
@@ -1083,12 +1086,16 @@ class UploadTab(QWidget):
             path if media_type == "이미지" else UploadTab.video_thumbnail_path(path) if media_type == "동영상" else None
         )
 
+        if media_type == "동영상":
+            preview_path = UploadTab.video_preview_thumbnail_path(path)
+            if preview_path.is_file():
+                image_path = preview_path
         pixmap = QPixmap(str(image_path)) if image_path and image_path.exists() else None
         if pixmap and not pixmap.isNull():
             label.setPixmap(pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             label.set_source_path(str(image_path))
         elif media_type == "동영상":
-            label.setText("🎬 동영상\n(캡처 이미지 없음 -\n'동영상 캡처 이미지 생성' 이용)")
+            label.setText("🎬 동영상\n(미리보기 없음 -\n'동영상 미리보기 생성' 이용)")
             label.set_source_path("")
         elif media_type == "사운드":
             label.setText("🔊 사운드 파일")
@@ -1180,6 +1187,7 @@ class UploadTab(QWidget):
         media_storage_layout.addWidget(self.specimen_media_storage_path_input, 1)
         media_storage_layout.addWidget(media_storage_button)
         layout.addLayout(media_storage_layout)
+        layout.addWidget(QLabel("엑셀 저장 시 이미지가 있으면 저장 폴더를 다시 선택합니다. 이미지는 DB번호 이름으로 복사하며 원본은 유지합니다."))
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -1814,6 +1822,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
             self.set_form_value("채집년월일", date_text, self.specimen_form_widgets)
 
     def prepare_image_for_specimen_record(self, values: dict[str, Any]) -> dict[str, Any]:
+        if getattr(self, "_defer_media_copy", False):
+            return values
         media_path_text = normalize_text(values.get("파일경로"))
         if not media_path_text:
             return values
@@ -1845,8 +1855,10 @@ html, body, #map {{ height: 100%; margin: 0; }}
             return values
 
         source_path = Path(media_path_text)
-        if not source_path.exists():
-            return values
+        if not source_path.is_file():
+            source_path = Path(normalize_text(values.get("원본경로")))
+            if not source_path.is_file():
+                return values
 
         saved_path = self.save_specimen_media_file_to_storage(source_path, values)
         if not saved_path:
@@ -1864,15 +1876,19 @@ html, body, #map {{ height: 100%; margin: 0; }}
             values["경도"] = f"{longitude:.7f}"
         return values
 
-    def copy_pending_media_for_all_specimen_rows(self):
+    def copy_pending_media_for_all_specimen_rows(self, strict=False):
         for row in range(self.specimen_data_table.rowCount()):
             values = {
                 column: (self.specimen_data_table.item(row, col).text() if self.specimen_data_table.item(row, col) else "")
                 for col, column in enumerate(SPECIMEN_ROW_COLUMNS)
             }
             updated = self.apply_media_copy_to_specimen_row_values(values)
+            if strict and normalize_text(values.get("파일경로")) and updated is values:
+                return False
             if updated is not values:
                 self.write_specimen_data_row(row, updated)
+
+        return True
 
     def select_specimen_media_storage_dir(self):
         selected_dir = QFileDialog.getExistingDirectory(
@@ -1912,7 +1928,9 @@ html, body, #map {{ height: 100%; margin: 0; }}
         if same_folder and source_path.stem == expected_stem:
             # 이미 이 폴더에 DB번호 이름으로 저장돼 있는 파일 -> 복사할 필요 없음
             return source_path
-        if same_folder:
+        original_path = normalize_text(values.get("원본경로"))
+        already_copied = bool(original_path and Path(original_path).resolve() != source_path.resolve())
+        if same_folder and not already_copied:
             QMessageBox.warning(
                 self,
                 "이미지 저장",
@@ -1924,8 +1942,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
 
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = self.unique_media_path(target_dir, expected_stem, source_path.suffix.lower())
-            shutil.copy2(source_path, target_path)
+            target_path = copy_database_media(source_path, target_dir, expected_stem)
             self.set_specimen_save_status(f"이미지 저장 완료: {target_path}")
             return target_path
         except Exception as exc:
@@ -2044,6 +2061,12 @@ html, body, #map {{ height: 100%; margin: 0; }}
         return ""
 
     def clear_specimen_form(self):
+        self._specimen_last_selected_row = None
+        blocked = self.specimen_data_table.blockSignals(True)
+        try:
+            self.specimen_data_table.clearSelection()
+        finally:
+            self.specimen_data_table.blockSignals(blocked)
         for column_name in SPECIMEN_ROW_COLUMNS:
             if column_name in SPECIMEN_STICKY_FIELDS:
                 continue
@@ -2057,6 +2080,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
         self.apply_specimen_project_to_form()
         self.set_default_organization(self.specimen_form_widgets)
         self.apply_specimen_organization_to_form()
+        self.set_form_value("사업별 순번", self.project_sequence_for_form(True, new=True), self.specimen_form_widgets)
+        self.refresh_specimen_generated_fields(force_number=True)
         self.schedule_specimen_autosave()
 
     def collect_specimen_form_values(self) -> dict[str, Any]:
@@ -2333,8 +2358,12 @@ html, body, #map {{ height: 100%; margin: 0; }}
         self.set_specimen_save_status("임시저장을 다시 불러왔습니다.")
 
     def export_specimen_rows_to_excel(self):
-        self.sync_current_specimen_form_to_table()
-        self.copy_pending_media_for_all_specimen_rows()
+        deferred = getattr(self, "_defer_media_copy", False)
+        self._defer_media_copy = True
+        try:
+            self.sync_current_specimen_form_to_table()
+        finally:
+            self._defer_media_copy = deferred
         records = self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         if not records:
             QMessageBox.warning(self, "엑셀 저장", "저장할 행이 없습니다.")
@@ -2351,14 +2380,19 @@ html, body, #map {{ height: 100%; margin: 0; }}
             file_path += ".xlsx"
 
         try:
+            if not self.prepare_media_for_excel_export(True, choose_destination=True):
+                return
+            records = self.table_to_records(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
             self.write_specimen_excel_file(file_path, records)
             final_path = self.final_excel_path(file_path)
             self.write_specimen_final_excel_file(str(final_path), records)
+            gbif_path = self.gbif_excel_path(file_path)
+            write_gbif_template(str(gbif_path), records, "specimen")
             self.reset_after_specimen_export()
             QMessageBox.information(
                 self,
                 "엑셀 저장",
-                f"표본 데이터 엑셀을 저장했습니다.\n{file_path}\n{final_path}\n\n"
+                f"표본 데이터 엑셀 3개를 저장했습니다.\n{file_path}\n{final_path}\n{gbif_path}\n\n"
                 "작성 중이던 내용은 초기화되어 NO.가 1부터 다시 시작됩니다.",
             )
         except Exception as exc:
@@ -2764,6 +2798,12 @@ html, body, #map {{ height: 100%; margin: 0; }}
         return ""
 
     def clear_form(self):
+        self._last_selected_row = None
+        blocked = self.data_table.blockSignals(True)
+        try:
+            self.data_table.clearSelection()
+        finally:
+            self.data_table.blockSignals(blocked)
         for column_name in ROW_COLUMNS:
             if column_name in STICKY_FIELDS:
                 continue
@@ -2774,6 +2814,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
         self.apply_project_to_form()
         self.set_default_organization()
         self.apply_organization_to_form()
+        self.set_form_value("사업별 순번", self.project_sequence_for_form(False, new=True))
+        self.refresh_generated_fields(force_number=True)
         self.schedule_autosave()
 
     def collect_form_values(self) -> dict[str, Any]:
@@ -3200,7 +3242,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
     def probe_ffprobe_format(file_path: Path) -> dict:
         # 위치/재생시간/촬영일자가 모두 이 하나의 ffprobe 출력에서 나오므로, 호출부에서
         # 한 번만 실행해 공유하면 파일당 ffprobe 프로세스 기동을 최대 3->1회로 줄일 수 있음.
-        ffprobe = shutil.which("ffprobe")
+        ffprobe = find_media_tool("ffprobe")
         if not ffprobe:
             return {}
         data = UploadTab.run_json_command(
@@ -3263,6 +3305,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
         return str(creation_time).split("T")[0]
 
     def prepare_media_for_record(self, values: dict[str, Any]) -> dict[str, Any]:
+        if getattr(self, "_defer_media_copy", False):
+            return values
         media_path_text = normalize_text(values.get("파일경로"))
         if not media_path_text:
             return values
@@ -3301,8 +3345,10 @@ html, body, #map {{ height: 100%; margin: 0; }}
             return values
 
         source_path = Path(media_path_text)
-        if not source_path.exists():
-            return values
+        if not source_path.is_file():
+            source_path = Path(normalize_text(values.get("원본경로")))
+            if not source_path.is_file():
+                return values
 
         saved_path = self.save_media_file_to_storage(source_path, values)
         if not saved_path:
@@ -3323,7 +3369,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
             values[filename_field] = saved_path.name
         return values
 
-    def copy_pending_media_for_all_rows(self):
+    def copy_pending_media_for_all_rows(self, strict=False):
         # "입력"/"선택 행 수정"으로 개별 저장한 행만 저장 위치로 복사되고 나머지 행(예:
         # 미디어 폴더로 한 번에 불러온 뒤 아직 손 안 댄 행)은 원본 경로 그대로 남아있던 문제 ->
         # 임시저장/엑셀저장 시 모든 행을 훑어서 아직 안 옮겨진 미디어까지 마저 복사
@@ -3333,8 +3379,69 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 for col, column in enumerate(ROW_COLUMNS)
             }
             updated = self.apply_media_copy_to_row_values(values)
+            if strict and normalize_text(values.get("파일경로")) and updated is values:
+                return False
             if updated is not values:
                 self.write_data_row(row, updated)
+
+        return True
+
+    def prepare_media_for_excel_export(self, specimen, capture=True, choose_destination=False):
+        table = self.specimen_data_table if specimen else self.data_table
+        columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
+        media_rows = []
+        for row in range(table.rowCount()):
+            values = {field: table.item(row, col).text() if table.item(row, col) else ""
+                      for col, field in enumerate(columns)}
+            if not normalize_text(values.get("파일경로")):
+                continue
+            db_number = normalize_text(values.get("데이터베이스번호"))
+            if not db_number:
+                raise ValueError(f"{row + 1}행: 미디어 저장에 필요한 DB 번호가 없습니다.")
+            if self.safe_filename(db_number) != db_number:
+                raise ValueError(f"{row + 1}행: DB 번호에 파일명으로 사용할 수 없는 문자가 있습니다.")
+            source = Path(values["파일경로"])
+            original = Path(normalize_text(values.get("원본경로")))
+            if not source.is_file() and not original.is_file():
+                raise FileNotFoundError(f"{row + 1}행: 원본 미디어 파일을 찾을 수 없습니다.\n{source}")
+            if not specimen:
+                media_destination(Path("."), values)
+            media_rows.append(row)
+        if not media_rows:
+            return True
+        if choose_destination:
+            previous = self.specimen_media_storage_dir if specimen else self.media_storage_dir
+            title = "이번 엑셀의 이미지 저장 위치 선택" if specimen else "이번 엑셀의 미디어 저장 위치 선택"
+            selected = QFileDialog.getExistingDirectory(self, title, previous or "")
+            if not selected:
+                return False
+            if specimen:
+                self.specimen_media_storage_dir = selected
+                self.specimen_media_storage_path_input.setText(selected)
+            else:
+                self.media_storage_dir = selected
+                self.media_storage_path_input.setText(selected)
+        ensure = self.ensure_specimen_media_storage_dir if specimen else self.ensure_media_storage_dir
+        destination = ensure()
+        if destination is None:
+            return False
+        copier = self.copy_pending_media_for_all_specimen_rows if specimen else self.copy_pending_media_for_all_rows
+        if not copier(strict=True):
+            QMessageBox.warning(self, "엑셀 저장 중단", "미디어 파일을 DB 번호로 저장하지 못했습니다. 저장 위치와 DB 번호를 확인해 주세요. 작성 내용은 유지됩니다.")
+            return False
+        for row in media_rows:
+            path = Path(table.item(row, columns.index("파일경로")).text())
+            db_number = table.item(row, columns.index("데이터베이스번호")).text().strip()
+            values = {field: table.item(row, col).text() if table.item(row, col) else ""
+                      for col, field in enumerate(columns)}
+            expected_dir = destination if specimen else media_destination(destination, values)
+            if not path.is_file() or path.parent.resolve() != expected_dir.resolve() or path.stem != db_number:
+                raise ValueError(f"{row + 1}행: 미디어 저장 경로 또는 파일명이 DB 번호와 일치하지 않습니다.\n{path}")
+        if not specimen and capture:
+            _, _, failed, _ = self.capture_pending_video_thumbnails()
+            if failed:
+                raise RuntimeError(f"동영상 캡처 {failed}건을 생성하지 못했습니다. ffmpeg 설치와 동영상 파일을 확인해 주세요. 작성 내용은 유지됩니다.")
+        return True
 
     def select_media_storage_dir(self):
         selected_dir = QFileDialog.getExistingDirectory(self, "미디어 저장 위치 선택", self.media_storage_dir or "")
@@ -3367,12 +3474,20 @@ html, body, #map {{ height: 100%; margin: 0; }}
             self.set_save_status("미디어 저장 위치 선택이 취소되었습니다.")
             return None
 
+        try:
+            target_dir = media_destination(target_dir, values)
+        except ValueError as exc:
+            QMessageBox.warning(self, "동영상 저장", str(exc))
+            return None
+
         expected_stem = self.safe_filename(db_number)
         same_folder = source_path.parent.resolve() == target_dir.resolve()
         if same_folder and source_path.stem == expected_stem:
             # 이미 이 폴더에 DB번호 이름으로 저장돼 있는 파일 -> 복사할 필요 없음
             return source_path
-        if same_folder:
+        original_path = normalize_text(values.get("원본경로"))
+        already_copied = bool(original_path and Path(original_path).resolve() != source_path.resolve())
+        if same_folder and not already_copied:
             QMessageBox.warning(
                 self,
                 "미디어 저장",
@@ -3384,9 +3499,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
 
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = self.unique_media_path(target_dir, expected_stem, source_path.suffix.lower())
             t0 = time.perf_counter()
-            shutil.copy2(source_path, target_path)
+            target_path = copy_database_media(source_path, target_dir, expected_stem)
             logger.info(
                 "save_media_file_to_storage: copy %.3fs (%d bytes) -> %s",
                 time.perf_counter() - t0,
@@ -3394,7 +3508,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 target_path,
             )
             # ponytail: 동영상 캡처(ffmpeg 프로세스 실행)는 행 하나 저장할 때마다 부르면
-            # 무거워서 UI가 멈춤 -> 여기서는 안 하고, "동영상 캡처 이미지 생성" 버튼으로
+            # 무거워서 UI가 멈춤 -> 여기서는 안 하고, "동영상 미리보기 생성" 버튼으로
             # 한번에 일괄 처리(generate_video_thumbnails)하도록 분리.
             self.set_save_status(f"미디어 저장 완료: {target_path}")
             return target_path
@@ -3405,44 +3519,63 @@ html, body, #map {{ height: 100%; margin: 0; }}
 
     @staticmethod
     def capture_video_thumbnail(video_path: Path, output_path: Path, at_seconds: float = 1.0) -> bool:
-        ffmpeg = shutil.which("ffmpeg")
+        ffmpeg = find_media_tool("ffmpeg")
         if not ffmpeg:
             return False
-        try:
-            result = subprocess.run(
-                [ffmpeg, "-y", "-ss", str(at_seconds), "-i", str(video_path), "-frames:v", "1", str(output_path)],
-                capture_output=True,
-                timeout=20,
-                check=False,
-            )
-        except Exception:
-            return False
-        return result.returncode == 0 and output_path.exists()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        for position in dict.fromkeys((at_seconds, 0.0)):
+            try:
+                result = subprocess.run(
+                    [ffmpeg, "-y", "-ss", str(position), "-i", str(video_path), "-frames:v", "1", str(output_path)],
+                    capture_output=True, timeout=20, check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                if result.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+                    return True
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+        return False
 
     @staticmethod
     def video_thumbnail_path(video_path: Path) -> Path:
-        # 동영상 파일과 같은 폴더에 .jpg를 바로 만들면 원본 미디어 사이에 캡처 이미지가
-        # 섞여 보임 -> 그 폴더 밑에 "썸네일" 하위 폴더를 만들어 거기에 모아둠
+        # Saved videos and captures share the species-ID directory and database stem.
+        return video_path.with_suffix(".jpg")
+
+    @staticmethod
+    def video_preview_thumbnail_path(video_path: Path) -> Path:
         return video_path.parent / "썸네일" / f"{video_path.stem}.jpg"
 
     def generate_video_thumbnails(self):
-        success, skipped, failed, total = self.capture_pending_video_thumbnails()
+        try:
+            deferred = getattr(self, "_defer_media_copy", False)
+            self._defer_media_copy = True
+            try:
+                self.sync_current_form_to_table()
+            finally:
+                self._defer_media_copy = deferred
+            success, skipped, failed, total = self.capture_pending_video_thumbnails(preview=True)
+        except Exception as exc:
+            QMessageBox.critical(self, "동영상 미리보기 생성 실패", str(exc))
+            return
         if total == 0:
-            QMessageBox.information(self, "동영상 캡처", "캡처할 동영상 행이 없습니다 (미디어 저장이 먼저 필요합니다).")
+            QMessageBox.information(self, "동영상 미리보기 생성", "미리보기를 생성할 동영상 행이 없습니다.")
             return
 
         QMessageBox.information(
-            self, "동영상 캡처", f"완료: {success}건 생성, {skipped}건 이미 있음, {failed}건 실패(ffmpeg 필요)."
+            self, "동영상 미리보기 생성", f"완료: {success}건 생성, {skipped}건 이미 있음, {failed}건 실패(ffmpeg 필요)."
         )
-        self.set_save_status(f"동영상 캡처 이미지 생성 완료: {success}건 생성 / {failed}건 실패")
+        self.set_save_status(f"동영상 미리보기 생성 완료: {success}건 생성 / {failed}건 실패")
+        if hasattr(self, "media_thumbnail_label"):
+            self.update_media_thumbnail()
 
-    def capture_pending_video_thumbnails(self) -> tuple[int, int, int, int]:
+    def capture_pending_video_thumbnails(self, preview=False) -> tuple[int, int, int, int]:
         # "작성 내용 저장"/"엑셀로 저장"에서 동영상 행을 저장할 때 캡처본도 같이 남기기
-        # 위해 호출됨(silent). "동영상 캡처 이미지 생성" 버튼도 이걸 재사용.
+        # 위해 호출됨(silent). "동영상 미리보기 생성" 버튼도 이걸 재사용.
         media_column = ROW_COLUMNS.index("파일경로")
         type_column = ROW_COLUMNS.index("미디어타입")
 
         video_paths = []
+        invalid = 0
         for row in range(self.data_table.rowCount()):
             type_item = self.data_table.item(row, type_column)
             media_item = self.data_table.item(row, media_column)
@@ -3451,13 +3584,30 @@ html, body, #map {{ height: 100%; margin: 0; }}
             if not media_item or not media_item.text():
                 continue
             video_path = Path(media_item.text())
-            if video_path.exists():
+            if preview:
+                if video_path.is_file():
+                    video_paths.append(video_path)
+                else:
+                    invalid += 1
+                continue
+            values = {field: self.data_table.item(row, col).text() if self.data_table.item(row, col) else ""
+                      for col, field in enumerate(ROW_COLUMNS)}
+            try:
+                expected_dir = media_destination(self.media_storage_dir, values)
+            except ValueError:
+                invalid += 1
+                continue
+            if (self.media_storage_dir and video_path.is_file()
+                    and video_path.parent.resolve() == expected_dir.resolve()
+                    and video_path.stem == normalize_text(values.get("데이터베이스번호"))):
                 video_paths.append(video_path)
+            else:
+                invalid += 1
 
         success, skipped, failed = 0, 0, 0
         for video_path in video_paths:
-            thumbnail_path = self.video_thumbnail_path(video_path)
-            if thumbnail_path.exists():
+            thumbnail_path = self.video_preview_thumbnail_path(video_path) if preview else self.video_thumbnail_path(video_path)
+            if thumbnail_path.is_file() and thumbnail_path.stat().st_size > 0:
                 skipped += 1
                 continue
             thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3465,7 +3615,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 success += 1
             else:
                 failed += 1
-        return success, skipped, failed, len(video_paths)
+        return success, skipped, failed + invalid, len(video_paths) + invalid
 
     @staticmethod
     def safe_filename(value: str) -> str:
@@ -3508,7 +3658,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
         if latitude is not None and longitude is not None:
             return latitude, longitude, "동영상 메타데이터 위치정보를 적용했습니다."
 
-        if media_type in {"동영상", "사운드"} and not shutil.which("exiftool") and not shutil.which("ffprobe"):
+        if media_type in {"동영상", "사운드"} and not shutil.which("exiftool") and not find_media_tool("ffprobe"):
             return None, None, "동영상/사운드 위치정보를 읽으려면 exiftool 또는 ffprobe가 필요합니다."
         return None, None, "선택한 파일에 읽을 수 있는 위도/경도 메타데이터가 없습니다."
 
@@ -4268,9 +4418,12 @@ html, body, #map {{ height: 100%; margin: 0; }}
         self.set_save_status("임시저장을 다시 불러왔습니다.")
 
     def export_rows_to_excel(self):
-        self.sync_current_form_to_table()
-        self.copy_pending_media_for_all_rows()
-        self.capture_pending_video_thumbnails()
+        deferred = getattr(self, "_defer_media_copy", False)
+        self._defer_media_copy = True
+        try:
+            self.sync_current_form_to_table()
+        finally:
+            self._defer_media_copy = deferred
         records = self.table_to_records(self.data_table, ROW_COLUMNS)
         if not records:
             QMessageBox.warning(self, "엑셀 저장", "저장할 행이 없습니다.")
@@ -4287,14 +4440,19 @@ html, body, #map {{ height: 100%; margin: 0; }}
             file_path += ".xlsx"
 
         try:
+            if not self.prepare_media_for_excel_export(False, choose_destination=True):
+                return
+            records = self.table_to_records(self.data_table, ROW_COLUMNS)
             self.write_excel_file(file_path, records)
             final_path = self.final_excel_path(file_path)
             self.write_final_excel_file(str(final_path), records)
+            gbif_path = self.gbif_excel_path(file_path)
+            write_gbif_template(str(gbif_path), records, "observation")
             self.reset_after_export()
             QMessageBox.information(
                 self,
                 "엑셀 저장",
-                f"신규 데이터 엑셀을 저장했습니다.\n{file_path}\n{final_path}\n\n"
+                f"신규 데이터 엑셀 3개를 저장했습니다.\n{file_path}\n{final_path}\n{gbif_path}\n\n"
                 "작성 중이던 내용은 초기화되어 NO.가 1부터 다시 시작됩니다.",
             )
         except Exception as exc:
@@ -4512,6 +4670,11 @@ html, body, #map {{ height: 100%; margin: 0; }}
     def final_excel_path(file_path: str) -> Path:
         path = Path(file_path)
         return path.with_name(f"{path.stem}_완성본{path.suffix}")
+
+    @staticmethod
+    def gbif_excel_path(file_path: str) -> Path:
+        path = Path(file_path)
+        return path.with_name(f"{path.stem}_GBIF{path.suffix}")
 
     @staticmethod
     def write_final_excel_file(file_path: str, records: list[dict[str, Any]]):
