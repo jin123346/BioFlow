@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
-    QLabel, QMessageBox, QVBoxLayout,
+    QLabel, QMessageBox, QSpinBox, QVBoxLayout,
 )
 
 
@@ -18,6 +18,11 @@ class BatchApplyDialog(QDialog):
         self.preserve_numbers = QCheckBox("기존 데이터베이스번호 유지 (빈 번호만 생성)")
         self.preserve_numbers.setChecked(True)
         form.addRow("번호 생성", self.preserve_numbers)
+        self.start_number = QSpinBox()
+        self.start_number.setRange(1, 99999)
+        self.start_number.setValue(1)
+        self.start_number.setToolTip("각 사업의 사업별 순번을 이 값부터 매깁니다. DB 번호도 사업별 순번을 사용합니다.")
+        form.addRow("사업별 순번 시작 번호", self.start_number)
         form.addRow("종ID·학명", self.species)
         self.taxon = QComboBox()
         self.taxon.addItem("기존 값 유지", "")
@@ -64,13 +69,15 @@ class BatchApplyDialog(QDialog):
             "species": self.species.isChecked(),
             "taxon_code": self.taxon.currentData() or (self.taxon.currentText() if self.taxon.currentIndex() else ""),
             "preserve_database_numbers": self.preserve_numbers.isChecked(),
+            "database_start_number": self.start_number.value(),
             "project": self.project.currentData(),
             "media_type": self.media.currentData() if self.media_codes else "",
         }
 
     def accept(self):
         values = self.values()
-        if not (values["species"] or values["project"] or values["media_type"] or values["taxon_code"]):
+        if not (values["species"] or values["project"] or values["media_type"] or values["taxon_code"]
+                or not values["preserve_database_numbers"] or values["database_start_number"] != 1):
             QMessageBox.warning(self, "일괄 적용", "적용할 항목을 선택해 주세요.")
             return
         super().accept()

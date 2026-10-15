@@ -1031,7 +1031,10 @@ class UploadTab(QWidget):
                 widget.setText(TEXT_DEFAULTS[column_name])
             if column_name == "데이터베이스번호":
                 widget.editingFinished.connect(lambda: self.edit_database_number(False))
-            if column_name in AUTO_FIELDS and column_name != "데이터베이스번호":
+            if column_name == "사업별 순번":
+                widget.textEdited.connect(lambda: self.refresh_generated_fields(force_number=True))
+                widget.editingFinished.connect(lambda: self.commit_project_sequence(False))
+            if column_name in AUTO_FIELDS and column_name not in {"데이터베이스번호", "사업별 순번"}:
                 widget.setEnabled(False)
                 if isinstance(widget, QLineEdit):
                     widget.setReadOnly(True)
@@ -1324,7 +1327,10 @@ class UploadTab(QWidget):
                 widget.setText(TEXT_DEFAULTS[column_name])
             if column_name == "데이터베이스번호":
                 widget.editingFinished.connect(lambda: self.edit_database_number(True))
-            if column_name in SPECIMEN_AUTO_FIELDS and column_name != "데이터베이스번호":
+            if column_name == "사업별 순번":
+                widget.textEdited.connect(lambda: self.refresh_specimen_generated_fields(force_number=True))
+                widget.editingFinished.connect(lambda: self.commit_project_sequence(True))
+            if column_name in SPECIMEN_AUTO_FIELDS and column_name not in {"데이터베이스번호", "사업별 순번"}:
                 widget.setEnabled(False)
                 if isinstance(widget, QLineEdit):
                     widget.setReadOnly(True)
@@ -1356,16 +1362,19 @@ class UploadTab(QWidget):
     def apply_specimen_organization_to_form(self, label: str = ""):
         self.apply_organization_to_form(label, self.specimen_form_widgets, self.refresh_specimen_generated_fields)
 
-    def refresh_specimen_generated_fields(self):
-        self.set_form_value("사업별 순번", self.project_sequence_for_form(True), self.specimen_form_widgets)
-        if self.restore_existing_database_number(True):
+    def refresh_specimen_generated_fields(self, *, force_number=False):
+        if self.specimen_autosave_suspended:
+            return
+        if not self.get_form_value("사업별 순번", self.specimen_form_widgets):
+            self.set_form_value("사업별 순번", self.project_sequence_for_form(True), self.specimen_form_widgets)
+        if not force_number and self.restore_existing_database_number(True):
             return
         organization_code = self.get_form_value("기관코드", self.specimen_form_widgets)
         taxon_code = self.get_form_value("분류코드", self.specimen_form_widgets)
         year = self.get_form_value("사업년도", self.specimen_form_widgets)
         order = self.get_form_value("순번", self.specimen_form_widgets)
         no = self.get_form_value("사업별 순번", self.specimen_form_widgets)
-        if organization_code and taxon_code and year and order and no:
+        if organization_code and taxon_code and year and order and str(no).isdigit():
             year_text = str(year)[-2:].zfill(2)
             self.set_form_value(
                 "데이터베이스번호",
@@ -1983,6 +1992,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
         if self.specimen_autosave_suspended:
             return
         column_name = SPECIMEN_ROW_COLUMNS[item.column()]
+        if column_name == "사업별 순번":
+            self.renumber_project_sequences_below(self.specimen_data_table, SPECIMEN_ROW_COLUMNS, item.row(), True)
         if column_name in {"사업년도", "순번"}:
             self.recalculate_project_sequences(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
         if column_name == "데이터베이스번호":
@@ -2091,6 +2102,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
         self.write_specimen_data_row(row, values)
 
     def write_specimen_data_row(self, row: int, values: dict[str, Any]):
+        old_sequence = self.specimen_data_table.item(row, SPECIMEN_ROW_COLUMNS.index("사업별 순번"))
+        sequence_changed = old_sequence is not None and old_sequence.text().strip() != str(values.get("사업별 순번", "")).strip()
         values = self.preserve_row_database_number(self.specimen_data_table, SPECIMEN_ROW_COLUMNS, row, values)
         was_blocked = self.specimen_data_table.blockSignals(True)
         try:
@@ -2107,6 +2120,9 @@ html, body, #map {{ height: 100%; margin: 0; }}
 
         if not self.specimen_autosave_suspended:
             self.recalculate_project_sequences(self.specimen_data_table, SPECIMEN_ROW_COLUMNS)
+
+        if sequence_changed:
+            self.renumber_project_sequences_below(self.specimen_data_table, SPECIMEN_ROW_COLUMNS, row, True)
 
     def paste_clipboard_into_specimen_table(self):
         text = QApplication.clipboard().text()
@@ -2616,12 +2632,15 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 widget.setCurrentIndex(row)
                 return
 
-    def refresh_generated_fields(self):
-        self.set_form_value("사업별 순번", self.project_sequence_for_form(False))
+    def refresh_generated_fields(self, *, force_number=False):
+        if self.autosave_suspended:
+            return
+        if not self.get_form_value("사업별 순번", self.form_widgets):
+            self.set_form_value("사업별 순번", self.project_sequence_for_form(False), self.form_widgets)
         media_type = self.get_form_value("미디어타입")
         media_code = MEDIA_TYPE_CODES.get(media_type, "")
         self.set_form_value("미디어코드", media_code)
-        if self.restore_existing_database_number(False):
+        if not force_number and self.restore_existing_database_number(False):
             return
 
         organization_code = self.get_form_value("기관코드")
@@ -2630,7 +2649,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
         year = self.get_form_value("사업년도")
         order = self.get_form_value("순번")
         no = self.get_form_value("사업별 순번")
-        if organization_code and media_code and taxon_code and year and order and no:
+        if organization_code and media_code and taxon_code and year and order and str(no).isdigit():
             year_text = str(year)[-2:].zfill(2)
             self.set_form_value(
                 "데이터베이스번호",
@@ -2692,6 +2711,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
         if self.autosave_suspended:
             return
         column_name = ROW_COLUMNS[item.column()]
+        if column_name == "사업별 순번":
+            self.renumber_project_sequences_below(self.data_table, ROW_COLUMNS, item.row(), False)
         if column_name in {"사업년도", "순번"}:
             self.recalculate_project_sequences(self.data_table, ROW_COLUMNS)
         if column_name == "데이터베이스번호":
@@ -2881,6 +2902,10 @@ html, body, #map {{ height: 100%; margin: 0; }}
         if dialog.exec() != QDialog.Accepted:
             return
         options = dialog.values()
+        start_number = options.get("database_start_number", 1)
+        if start_number + row_count - 1 > 99999:
+            QMessageBox.warning(self, "DB 번호 생성", "시작 순번과 전체 행 수의 합이 5자리 범위(99999)를 초과합니다. 시작 순번을 낮춰 주세요.")
+            return
         project = options["project"]
         media_type = options["media_type"]
         taxon_code = options.get("taxon_code", "")
@@ -2918,9 +2943,9 @@ html, body, #map {{ height: 100%; margin: 0; }}
                     put(row, "분류코드", taxon_code)
                 group = (cell(row, "사업년도"), cell(row, "순번"))
                 project_counts[group] = project_counts.get(group, 0) + 1
-                put(row, "사업별 순번", project_counts[group])
+                put(row, "사업별 순번", start_number + project_counts[group] - 1)
 
-                if (project or media_type or taxon_code) and not (options.get("preserve_database_numbers", True) and cell(row, "데이터베이스번호")):
+                if (project or media_type or taxon_code or start_number != 1 or not options.get("preserve_database_numbers", True)) and not (options.get("preserve_database_numbers", True) and cell(row, "데이터베이스번호")):
                     parts = [cell(row, name) for name in ("기관코드", "분류코드", "사업년도", "순번", "사업별 순번")]
                     code = cell(row, "미디어코드") if "미디어코드" in col else "SP"
                     number = ""
@@ -3715,6 +3740,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
         self.write_data_row(row, values)
 
     def write_data_row(self, row: int, values: dict[str, Any]):
+        old_sequence = self.data_table.item(row, ROW_COLUMNS.index("사업별 순번"))
+        sequence_changed = old_sequence is not None and old_sequence.text().strip() != str(values.get("사업별 순번", "")).strip()
         values = self.preserve_row_database_number(self.data_table, ROW_COLUMNS, row, values)
         was_blocked = self.data_table.blockSignals(True)
         try:
@@ -3730,6 +3757,9 @@ html, body, #map {{ height: 100%; margin: 0; }}
         if not self.autosave_suspended:
             self.recalculate_project_sequences(self.data_table, ROW_COLUMNS)
 
+        if sequence_changed:
+            self.renumber_project_sequences_below(self.data_table, ROW_COLUMNS, row, False)
+
     def current_data_row(self) -> int | None:
         indexes = self.data_table.selectedIndexes()
         if not indexes:
@@ -3739,7 +3769,9 @@ html, body, #map {{ height: 100%; margin: 0; }}
         return min(index.row() for index in indexes)
 
     def preserve_row_database_number(self, table, columns, row, values):
-        if self.preserve_database_numbers.isChecked():
+        sequence_item = table.item(row, columns.index("사업별 순번"))
+        sequence_changed = sequence_item is not None and sequence_item.text().strip() != str(values.get("사업별 순번", "")).strip()
+        if self.preserve_database_numbers.isChecked() and not sequence_changed:
             item = table.item(row, columns.index("데이터베이스번호"))
             if item and (item.text().strip() or item.data(DB_NUMBER_MANUAL_ROLE)):
                 values = dict(values)
@@ -3758,13 +3790,61 @@ html, body, #map {{ height: 100%; margin: 0; }}
         columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
         group = tuple(str(self.get_form_value(field, widgets)) for field in ("사업년도", "순번"))
         selected = None if new else (self.current_specimen_data_row() if specimen else self.current_data_row())
-        count = 0
-        for row in range(table.rowCount() if selected is None else selected):
+        if selected is not None:
+            item = table.item(selected, columns.index("사업별 순번"))
+            if item and item.text().isdigit():
+                return int(item.text())
+        maximum = 0
+        for row in range(table.rowCount()):
             key = tuple(table.item(row, columns.index(field)).text().strip() if table.item(row, columns.index(field)) else ""
                         for field in ("사업년도", "순번"))
-            if key == group:
-                count += 1
-        return count + 1
+            item = table.item(row, columns.index("사업별 순번"))
+            if key == group and item and item.text().isdigit():
+                maximum = max(maximum, int(item.text()))
+        return maximum + 1
+
+    def commit_project_sequence(self, specimen):
+        suspended = self.specimen_autosave_suspended if specimen else self.autosave_suspended
+        if suspended:
+            return
+        row = self._specimen_last_selected_row if specimen else self._last_selected_row
+        if row is None:
+            return
+        table = self.specimen_data_table if specimen else self.data_table
+        columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
+        widgets = self.specimen_form_widgets if specimen else self.form_widgets
+        value = str(self.get_form_value("사업별 순번", widgets)).strip()
+        old = table.item(row, columns.index("사업별 순번"))
+        if not value.isdigit() or not 1 <= int(value) <= 99999 or (old and old.text().strip() == value):
+            return
+        values = (self.collect_specimen_form_values if specimen else self.collect_form_values)()
+        (self.write_specimen_data_row if specimen else self.write_data_row)(row, values)
+        (self.schedule_specimen_autosave if specimen else self.schedule_autosave)()
+
+    def renumber_project_sequences_below(self, table, columns, start_row, specimen):
+        def cell(row, name):
+            item = table.item(row, columns.index(name))
+            return item.text().strip() if item else ""
+
+        value = cell(start_row, "사업별 순번")
+        if not value.isdigit() or not 1 <= int(value) <= 99999:
+            return
+        group = tuple(cell(start_row, field) for field in ("사업년도", "순번"))
+        if not all(group):
+            return
+        rows = [row for row in range(start_row, table.rowCount())
+                if tuple(cell(row, field) for field in ("사업년도", "순번")) == group]
+        if int(value) + len(rows) - 1 > 99999:
+            QMessageBox.warning(self, "사업별 순번", "아래 행까지 번호를 매기면 99999를 초과합니다. 시작 번호를 낮춰 주세요.")
+            return
+        blocked = table.blockSignals(True)
+        try:
+            for sequence, row in enumerate(rows, int(value)):
+                table.setItem(row, columns.index("사업별 순번"), QTableWidgetItem(str(sequence)))
+                expected, _, error = self._database_number_rule(table, columns, row, specimen)
+                table.setItem(row, columns.index("데이터베이스번호"), QTableWidgetItem("" if error else expected))
+        finally:
+            table.blockSignals(blocked)
 
     def recalculate_project_sequences(self, table, columns):
         if "사업별 순번" not in columns:
@@ -3775,18 +3855,23 @@ html, body, #map {{ height: 100%; margin: 0; }}
             for row in range(table.rowCount()):
                 group = tuple(table.item(row, columns.index(field)).text().strip() if table.item(row, columns.index(field)) else ""
                               for field in ("사업년도", "순번"))
-                counts[group] = counts.get(group, 0) + 1
-                value = str(counts[group]) if all(group) else ""
                 index = columns.index("사업별 순번")
                 item = table.item(row, index)
-                if item is None or item.text() != value:
-                    table.setItem(row, index, QTableWidgetItem(value))
+                text = item.text().strip() if item else ""
+                if text:
+                    if text.isdigit():
+                        counts[group] = max(counts.get(group, 0), int(text))
+                    continue
+                counts[group] = counts.get(group, 0) + 1
+                if all(group):
+                    table.setItem(row, index, QTableWidgetItem(str(counts[group])))
         finally:
             table.blockSignals(blocked)
 
     def prepare_new_project_number(self, values, specimen):
         values = dict(values)
-        sequence = self.project_sequence_for_form(specimen, new=True)
+        raw_sequence = str(values.get("사업별 순번", ""))
+        sequence = int(raw_sequence) if raw_sequence.isdigit() and int(raw_sequence) > 0 else self.project_sequence_for_form(specimen, new=True)
         values["사업별 순번"] = str(sequence)
         media = "SP" if specimen else MEDIA_TYPE_CODES.get(values.get("미디어타입"), "")
         fields = [values.get(field) for field in ("기관코드", "분류코드", "사업년도", "순번")]
@@ -3802,7 +3887,7 @@ html, body, #map {{ height: 100%; margin: 0; }}
         if not hasattr(self, table_name):
             return False
         table = getattr(self, table_name)
-        row = self.current_specimen_data_row() if specimen else self.current_data_row()
+        row = self._specimen_last_selected_row if specimen else self._last_selected_row
         if row is None:
             return False
         columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
@@ -3810,6 +3895,9 @@ html, body, #map {{ height: 100%; margin: 0; }}
         if not item or not (item.text().strip() or item.data(DB_NUMBER_MANUAL_ROLE)):
             return False
         widgets = self.specimen_form_widgets if specimen else self.form_widgets
+        sequence_item = table.item(row, columns.index("사업별 순번"))
+        if sequence_item and sequence_item.text().strip() != str(self.get_form_value("사업별 순번", widgets)).strip():
+            return False
         self.set_form_value("데이터베이스번호", item.text(), widgets)
         return True
 
