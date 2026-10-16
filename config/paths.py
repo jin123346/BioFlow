@@ -51,6 +51,7 @@ _SEED_EXCLUDE_NAMES = {
     "new_data_draft.json",
     "new_specimen_draft.json",
     "excel_column_mappings.json",
+    "sql_media_mappings.json",
     "local_version.json",
     "local_version_history.json",
     "remote_data_version.json",

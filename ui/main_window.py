@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
 from ui.tabs.dashboard_tab import DashboardTab
 # 미구현 탭은 구현 완료 후 다시 활성화합니다.
 # from ui.tabs.validataion_tab import ValidationTab
-# from ui.tabs.sql_tab import SqlTab
 # from ui.tabs.gbif_tab import GbifTab
 from config.paths import ASSETS_DIR
 
@@ -61,7 +60,8 @@ class MainWindow(QMainWindow):
             (QWidget(), "종정보 마스터"),
             (QWidget(), "신규 데이터"),
             (QWidget(), "신규/업데이트 종 정리"),
-            # 미구현: 비교 결과, SQL 생성, GBIF 데이터
+            (QWidget(), "SQL 생성"),
+            # 미구현: 비교 결과, GBIF 데이터
         ]:
             self.pages.addWidget(page)
             self.nav_list.addItem(label)
@@ -83,6 +83,9 @@ class MainWindow(QMainWindow):
             elif index == 3:
                 from ui.tabs.species_review_tab import SpeciesReviewTab
                 page = SpeciesReviewTab(self.upload_tab)
+            elif index == 4:
+                from ui.tabs.sql_tab import SqlTab
+                page = SqlTab()
             else:
                 raise ValueError(index)
             placeholder = self.pages.widget(index)

@@ -2,7 +2,7 @@ import logging
 import sys
 
 from PySide6.QtCore import QThread, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import QApplication, QMessageBox #PySide6 앱 실행 객체
 from config.paths import LOG_DIR, ensure_data_seeded, get_app_version
 from services.data_update_service import apply_update, check_for_app_update, check_for_update
@@ -74,6 +74,10 @@ def main():
     install_error_logging()
     ensure_data_seeded()
     app = QApplication(sys.argv)  #GUI 프로그램 시작 준비
+    # Avoid the native white background before the first styled paint.
+    palette = app.palette()
+    palette.setColor(QPalette.Window, QColor("#f4f6f9"))
+    app.setPalette(palette)
     app.setStyleSheet(STYLE_SHEET)
     install_scroll_wheel_guard()
 
@@ -85,7 +89,8 @@ def main():
     # app.py)에는 pyi_splash 모듈 자체가 없어서 그냥 넘어감.
     try:
         import pyi_splash
-        pyi_splash.close()
+        # Keep the splash until the event loop has painted the main window.
+        QTimer.singleShot(100, pyi_splash.close)
     except ImportError:
         pass
 
