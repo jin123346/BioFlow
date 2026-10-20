@@ -37,6 +37,7 @@ TEMPLATE_COLUMNS = [
     "국명",
     "학명",
     "clss_id",
+    "update_clss_id",
     "clssc_sstem_kor",
     "clssc_sstem_latin",
     "일반적특징(크기,체색과무늬,주요형질 등)",
@@ -162,7 +163,7 @@ class SpeciesReviewTab(QWidget):
             self.review_form.addRow(column_name, widget)
             if column_name in {field for pair in RANK_FIELDS for field in pair}:
                 widget.editingFinished.connect(self.refresh_form_classification)
-            if column_name in {"clss_id", "clssc_sstem_kor", "clssc_sstem_latin"}:
+            if column_name in {"clss_id", "update_clss_id", "clssc_sstem_kor", "clssc_sstem_latin"}:
                 widget.setReadOnly(True)
             if column_name in {"이전 국명", "이전 학명", "이전 국명 및 학명"}:
                 # 이전 국명/이전 학명을 적고 다른 칸으로 넘어가는 순간, 클릭해서
@@ -212,7 +213,17 @@ class SpeciesReviewTab(QWidget):
         self.form_widgets["기존ID값"].setText(self.matched_species_id(matched))
         if not scientific_name:
             self.form_widgets["이전 학명"].setText(normalize_text(matched.get("학명")))
-        self.refresh_form_classification()
+        classification = self.matched_classification_values(matched)
+        if any(classification.values()):
+            for field, value in classification.items():
+                self.form_widgets[field].setText(value)
+                self.form_widgets[field].setToolTip("기존 종정보 마스터에서 불러옴")
+        else:
+            self.refresh_form_classification()
+        for field, value in self.matched_characteristic_values(matched).items():
+            if value and not self.form_widgets[field].text().strip():
+                self.form_widgets[field].setText(value)
+                self.form_widgets[field].setToolTip("기존 종정보 마스터에서 불러옴")
 
     def current_table_row(self) -> int | None:
         rows = {index.row() for index in self.table.selectedIndexes()}
@@ -330,6 +341,14 @@ class SpeciesReviewTab(QWidget):
         combo = self.sender()
         for row in range(self.table.rowCount()):
             if self.table.cellWidget(row, 0) is combo:
+                # 표의 구분을 바꾼을 때 선택 행의 입력 폼도 즉시 동기화한다.
+                # 그렇지 않으면 행 이동 시 폼의 이전 값이 표에 다시 쓰인다.
+                if row == self._last_selected_row:
+                    form_combo = self.form_widgets.get(STATUS_COLUMN)
+                    if isinstance(form_combo, QComboBox):
+                        blocked = form_combo.blockSignals(True)
+                        form_combo.setCurrentText(text)
+                        form_combo.blockSignals(blocked)
                 # 국명/학명 칸은 "수정 후 값"을 적는 칸이라 여기선 절대 조회 트리거로 안 씀.
                 # 이미 "이전 국명"/"이전 학명"에 값이 있으면 그 값으로만 조회.
                 if text == "업데이트 필요":
@@ -385,6 +404,7 @@ class SpeciesReviewTab(QWidget):
         id_col = TEMPLATE_COLUMNS.index("기존ID값") + 1
         latin_col = TEMPLATE_COLUMNS.index("이전 학명") + 1
 
+        classification = self.matched_classification_values(matched)
         was_blocked = self.table.blockSignals(True)
         try:
             self.table.setItem(row, id_col, QTableWidgetItem(self.matched_species_id(matched)))
@@ -393,9 +413,59 @@ class SpeciesReviewTab(QWidget):
             if not (latin_item and latin_item.text().strip()):
                 self.table.setItem(row, latin_col, QTableWidgetItem(normalize_text(matched.get("학명"))))
 
+            # 업데이트 종은 기존 종정보 마스터에 저장된 분류체계를 그대로 승계한다.
+            # 이전에는 현재 행의 과/상위 분류로만 다시 매칭해, 불러온 엑셀에
+            # 분류 컬럼이 없으면 clss 값이 빈칸으로 남는 문제가 있었다.
+            for field, value in classification.items():
+                self.table.setItem(row, TEMPLATE_COLUMNS.index(field) + 1, QTableWidgetItem(value))
+
+            # 사용자가 이미 새 내용을 입력했다면 유지하고, 빈칸일 때만
+            # 기존 종정보 마스터의 국문 특징을 승계한다.
+            for field, value in self.matched_characteristic_values(matched).items():
+                column = TEMPLATE_COLUMNS.index(field) + 1
+                item = self.table.item(row, column)
+                if value and not (item and item.text().strip()):
+                    self.table.setItem(row, column, QTableWidgetItem(value))
+
         finally:
             self.table.blockSignals(was_blocked)
-        self.apply_classification_match(row)
+        if not any(classification.values()):
+            self.apply_classification_match(row)
+
+    @staticmethod
+    def matched_classification_values(matched) -> dict[str, str]:
+        aliases = {
+            "clss_id": ("clss_id", "clssc_sstem_info_id", "분류체계정보ID"),
+            "clssc_sstem_kor": ("clssc_sstem_kor", "taxonomy_name", "분류체계명(국문)"),
+            "clssc_sstem_latin": ("clssc_sstem_latin", "taxonomy_latin", "분류체계명(라틴)"),
+        }
+        result = {}
+        for target, candidates in aliases.items():
+            result[target] = next(
+                (clean_master_value(matched.get(source, "")) for source in candidates
+                 if clean_master_value(matched.get(source, ""))),
+                "",
+            )
+        return result
+
+    @staticmethod
+    def matched_characteristic_values(matched) -> dict[str, str]:
+        aliases = {
+            "일반적특징(크기,체색과무늬,주요형질 등)": (
+                "일반적특징 국문명", "일반적특징(크기,체색과무늬,주요형질 등)",
+            ),
+            "생태적특징(서식지,먹이습성,행동습성,국내분포,국외분포 등)": (
+                "생태적특징 국문명", "생태적특징(서식지,먹이습성,행동습성,국내분포,국외분포 등)",
+            ),
+        }
+        result = {}
+        for target, candidates in aliases.items():
+            result[target] = next(
+                (clean_master_value(matched.get(source, "")) for source in candidates
+                 if clean_master_value(matched.get(source, ""))),
+                "",
+            )
+        return result
 
     def import_previous_names_from_excel(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -442,17 +512,27 @@ class SpeciesReviewTab(QWidget):
 
     def classify_values(self, values):
         values = dict(values)
+        # 과/상위 분류가 없는 업데이트 행의 마스터 clss 값을 지우지 않는다.
+        if not any(self.classification_service.key(values.get(field))
+                   for pair in RANK_FIELDS for field in pair):
+            values["update_clss_id"] = ""
+            return values
         match, reason = self.classification_service.match(values)
-        values["clss_id"] = str(match["clssc_sstem_info_id"]) if match else ""
-        values["clssc_sstem_kor"] = match["taxonomy_name"] if match else ""
-        values["clssc_sstem_latin"] = match["taxonomy_latin"] if match else ""
+        values["update_clss_id"] = str(match["clssc_sstem_info_id"]) if match else ""
+
+        # 업데이트 종은 기존 마스터의 clss 값을 유지하고 변경 예정 ID만
+        # update_clss_id에 분리한다. 기존 ID가 없는 신규 종은 종래처럼 분류체계를 채운다.
+        if not clean_master_value(values.get("기존ID값", "")):
+            values["clss_id"] = str(match["clssc_sstem_info_id"]) if match else ""
+            values["clssc_sstem_kor"] = match["taxonomy_name"] if match else ""
+            values["clssc_sstem_latin"] = match["taxonomy_latin"] if match else ""
         return values
 
     def refresh_form_classification(self):
         values = self.collect_form_values()
         match, reason = self.classification_service.match(values)
         classified = self.classify_values(values)
-        for field in ("clss_id", "clssc_sstem_kor", "clssc_sstem_latin"):
+        for field in ("clss_id", "update_clss_id", "clssc_sstem_kor", "clssc_sstem_latin"):
             self.form_widgets[field].setText(classified[field])
             self.form_widgets[field].setToolTip(reason)
 
@@ -462,7 +542,7 @@ class SpeciesReviewTab(QWidget):
         classified = self.classify_values(values)
         blocked = self.table.blockSignals(True)
         try:
-            for field in ("clss_id", "clssc_sstem_kor", "clssc_sstem_latin"):
+            for field in ("clss_id", "update_clss_id", "clssc_sstem_kor", "clssc_sstem_latin"):
                 item = QTableWidgetItem(classified[field])
                 item.setToolTip(reason)
                 self.table.setItem(row, TEMPLATE_COLUMNS.index(field) + 1, item)
