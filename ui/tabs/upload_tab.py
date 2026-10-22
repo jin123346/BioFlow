@@ -297,8 +297,8 @@ DEFAULT_ORGANIZATION_NAME = "국립중앙과학관"
 
 SPECIMEN_DRAFT_FILE = DRAFT_DIR / "new_specimen_draft.json"
 
-# 표본은 관찰과 달리 미디어타입 구분 없이 이미지 등록만 지원하고,
-# 데이터베이스번호도 미디어코드 없이 "SP" 고정값을 사용 (기관코드-SP-분류코드-연도순번No)
+# 표본은 관찰과 달리 미디어타입 구분 없이 이미지 등록만 지원하며,
+# 데이터베이스번호에는 미디어코드를 넣지 않는다 (기관코드-분류코드-연도순번No)
 SPECIMEN_ROW_COLUMNS = [
     "NO.",
     "종고유ID",
@@ -1386,7 +1386,7 @@ class UploadTab(QWidget):
             year_text = str(year)[-2:].zfill(2)
             self.set_form_value(
                 "데이터베이스번호",
-                f"{organization_code}-SP-{taxon_code}-{year_text}{int(order):02d}{int(no):05d}",
+                f"{organization_code}-{taxon_code}-{year_text}{int(order):02d}{int(no):05d}",
                 self.specimen_form_widgets,
             )
         else:
@@ -4023,11 +4023,12 @@ html, body, #map {{ height: 100%; margin: 0; }}
         raw_sequence = str(values.get("사업별 순번", ""))
         sequence = int(raw_sequence) if raw_sequence.isdigit() and int(raw_sequence) > 0 else self.project_sequence_for_form(specimen, new=True)
         values["사업별 순번"] = str(sequence)
-        media = "SP" if specimen else MEDIA_TYPE_CODES.get(values.get("미디어타입"), "")
+        media = "" if specimen else MEDIA_TYPE_CODES.get(values.get("미디어타입"), "")
         fields = [values.get(field) for field in ("기관코드", "분류코드", "사업년도", "순번")]
-        if all(fields) and media:
+        if all(fields) and (specimen or media):
             org, taxon, year, order = fields
-            values["데이터베이스번호"] = f"{org}-{media}-{taxon}-{int(year) % 100:02d}{int(order):02d}{sequence:05d}"
+            prefix = f"{org}-{taxon}" if specimen else f"{org}-{media}-{taxon}"
+            values["데이터베이스번호"] = f"{prefix}-{int(year) % 100:02d}{int(order):02d}{sequence:05d}"
         return values
 
     def restore_existing_database_number(self, specimen):
@@ -4080,13 +4081,13 @@ html, body, #map {{ height: 100%; margin: 0; }}
         org, taxon, year, order, sequence = [
             cell(field) for field in ("기관코드", "분류코드", "사업년도", "순번", "사업별 순번")
         ]
-        media = "SP" if specimen else MEDIA_TYPE_CODES.get(cell("미디어타입"), cell("미디어코드"))
+        media = "" if specimen else MEDIA_TYPE_CODES.get(cell("미디어타입"), cell("미디어코드"))
         missing = [
             label
             for label, value in (
                 ("기관코드", org),
                 ("분류코드", taxon),
-                ("미디어타입", media),
+                *((() if specimen else (("미디어타입", media),))),
                 ("사업년도", year),
                 ("순번", order),
                 ("사업별 순번", sequence),
@@ -4104,7 +4105,8 @@ html, body, #map {{ height: 100%; margin: 0; }}
         except (TypeError, ValueError):
             return None, None, "사업년도·순번·사업별 순번이 올바른 숫자가 아님"
 
-        prefix = f"{org}-{media}-{taxon}-{year_code:02d}{order_code:02d}"
+        code_prefix = f"{org}-{taxon}" if specimen else f"{org}-{media}-{taxon}"
+        prefix = f"{code_prefix}-{year_code:02d}{order_code:02d}"
         expected = f"{prefix}{sequence_code:05d}"
         pattern = re.compile(rf"{re.escape(prefix)}\d{{5}}")
         return expected, pattern, ""

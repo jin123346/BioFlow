@@ -78,6 +78,33 @@ class UploadWorkflowTests(unittest.TestCase):
                 self.assertEqual(before, after)
         self.assertEqual(self.callback_errors, [])
 
+    def test_specimen_database_number_omits_sp_media_code(self):
+        values = {
+            "기관코드": "NSMK",
+            "분류코드": "PL",
+            "사업년도": 2026,
+            "순번": 7,
+            "사업별 순번": 5,
+        }
+
+        generated = self.editor.prepare_new_project_number(values, specimen=True)
+
+        self.assertEqual(generated["데이터베이스번호"], "NSMK-PL-260700005")
+
+    def test_observation_database_number_keeps_media_code(self):
+        values = {
+            "기관코드": "NSMK",
+            "분류코드": "PL",
+            "미디어타입": "이미지",
+            "사업년도": 2026,
+            "순번": 7,
+            "사업별 순번": 5,
+        }
+
+        generated = self.editor.prepare_new_project_number(values, specimen=False)
+
+        self.assertEqual(generated["데이터베이스번호"], "NSMK-OI-PL-260700005")
+
 
 if __name__ == "__main__":
     unittest.main()
