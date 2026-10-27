@@ -44,11 +44,10 @@ _app_version_path.write_text(json.dumps(_app_version_data, ensure_ascii=False, i
 # 제외 목록에서 빠져 배포될 수 있으므로 허용 목록을 사용한다.
 _release_seed_files = (
     'data/version.json',
-    'data/address/영문주소_정리.xlsx',
     'data/classification/master.json',
     'data/classification/version.json',
     'data/institution/institution.json',
-    'data/master/species_master.xlsx',
+    'data/master/species_master.sqlite',
     'data/reference/organizations.json',
     'data/reference/upload_projects.json',
 )
@@ -122,3 +121,12 @@ coll = COLLECT(
     upx_exclude=[],
     name=f'BioFlow-{APP_VERSION}',
 )
+
+# Keep the immutable address reference beside the EXE, outside the embedded
+# archive and outside user-data seeding. Never package either source workbook.
+_address_db = Path('data/address/english_admin.sqlite')
+if not _address_db.is_file():
+    raise FileNotFoundError('Build the English address reference with tools/build_address_db.py first')
+_address_destination = Path(coll.name) / 'data' / 'address'
+_address_destination.mkdir(parents=True, exist_ok=True)
+shutil.copy2(_address_db, _address_destination / _address_db.name)

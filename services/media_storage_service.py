@@ -1,4 +1,9 @@
-"""Copy media under its database identifier without silently changing the name."""
+"""Copy media under its database identifier without modifying source media.
+
+Source files are immutable inputs.  This service may only read them and create a
+separate destination file; conversion or metadata writes must never target the
+source path.
+"""
 
 import filecmp
 from pathlib import Path
@@ -27,6 +32,7 @@ def find_media_tool(name):
 
 
 def copy_database_media(source, target_dir, stem):
+    """Copy *source* to a database-named destination without altering *source*."""
     source, target_dir = Path(source), Path(target_dir)
     target = target_dir / f"{stem}{source.suffix.lower()}"
     if source.resolve() == target.resolve():

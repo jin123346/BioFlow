@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from services.data_update_service import DEFAULT_DOWNLOAD_URL, check_for_app_update
+from services.data_update_service import DEFAULT_DOWNLOAD_URL, apply_update, check_for_app_update
 
 
 class AppUpdateTests(unittest.TestCase):
@@ -39,6 +39,11 @@ class AppUpdateTests(unittest.TestCase):
     def test_network_or_json_failure_does_not_interrupt_startup(self):
         with patch("services.data_update_service._fetch_bytes", side_effect=OSError("offline")):
             self.assertIsNone(check_for_app_update("1.1.4"))
+
+    def test_species_update_requires_integrity_metadata(self):
+        for remote in ({"version": "x"}, {"version": "x", "species_sha256": "abc"}):
+            with self.subTest(remote=remote), self.assertRaises(ValueError):
+                apply_update(remote)
         with patch("services.data_update_service._fetch_bytes", return_value=b"invalid json"):
             self.assertIsNone(check_for_app_update("1.1.4"))
 

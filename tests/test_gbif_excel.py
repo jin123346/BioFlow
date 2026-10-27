@@ -124,7 +124,7 @@ class GbifExcelTests(unittest.TestCase):
                          patch("ui.tabs.upload_tab.QMessageBox.information") as info, \
                          patch("ui.tabs.upload_tab.QMessageBox.critical") as error, \
                          patch("ui.tabs.upload_tab.write_gbif_template", side_effect=OSError("test failure") if fail else write_gbif_template):
-                        action(ui)
+                        action(ui, include_media=True)
                     ui.prepare_media_for_excel_export.assert_called_once_with(specimen, choose_destination=True)
                     self.assertFalse(ui._defer_media_copy)
                     reset = ui.reset_after_specimen_export if specimen else ui.reset_after_export
@@ -138,6 +138,51 @@ class GbifExcelTests(unittest.TestCase):
                         error.assert_not_called()
                         self.assertEqual(len(list(Path(folder).glob("*.xlsx"))), 3)
                         self.assertTrue(ui.gbif_excel_path(path).exists())
+
+    def test_excel_only_export_skips_media_and_keeps_editor_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "records.xlsx"
+            ui = SimpleNamespace(
+                data_table=object(),
+                _defer_media_copy=False,
+                sync_current_form_to_table=Mock(),
+                table_to_records=Mock(return_value=[self.record(False)]),
+                confirm_location_issues_before_save=Mock(return_value=True),
+                prepare_media_for_excel_export=Mock(return_value=True),
+                reset_after_export=Mock(),
+                final_excel_path=UploadTab.final_excel_path,
+                gbif_excel_path=UploadTab.gbif_excel_path,
+                write_excel_file=UploadTab.write_excel_file,
+                write_final_excel_file=UploadTab.write_final_excel_file,
+            )
+            with patch("ui.tabs.upload_tab.QFileDialog.getSaveFileName", return_value=(str(path), "")), \
+                 patch("ui.tabs.upload_tab.QMessageBox.information"), \
+                 patch("ui.tabs.upload_tab.QMessageBox.critical"):
+                UploadTab.export_rows_to_excel(ui, include_media=False)
+            ui.prepare_media_for_excel_export.assert_not_called()
+            ui.reset_after_export.assert_not_called()
+            self.assertTrue(path.exists())
+            self.assertTrue(ui.final_excel_path(path).exists())
+            self.assertTrue(ui.gbif_excel_path(path).exists())
+
+    def test_manual_working_save_writes_one_basic_excel_without_media(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "working.xlsx"
+            ui = SimpleNamespace(
+                data_table=object(),
+                sync_current_form_to_table=Mock(),
+                table_to_records=Mock(return_value=[self.record(False)]),
+                write_excel_file=UploadTab.write_excel_file,
+                write_draft=Mock(),
+                collect_form_values=Mock(return_value={}),
+                set_save_status=Mock(),
+            )
+            with patch("ui.tabs.upload_tab.QFileDialog.getSaveFileName", return_value=(str(path), "")), \
+                 patch("ui.tabs.upload_tab.QMessageBox.information"):
+                UploadTab.save_draft(ui)
+            self.assertTrue(path.exists())
+            self.assertEqual(len(list(Path(folder).glob("*.xlsx"))), 1)
+            ui.write_draft.assert_called_once()
 
 
 if __name__ == "__main__":

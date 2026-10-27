@@ -1,6 +1,12 @@
 import pandas as pd
 import re
 
+
+def header_key(name) -> str:
+    """Normalize a displayed Excel header for column-name matching."""
+    name = re.split(r"[(（]", str(name), maxsplit=1)[0]
+    return re.sub(r"[\s/]", "", name).lower().removesuffix("명")
+
 def safe_int(value: object, default: int = 0) -> int:
     if value is None or str(value).strip() == "":
         return default

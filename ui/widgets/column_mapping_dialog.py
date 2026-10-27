@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 import pandas as pd
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -15,15 +13,10 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
 )
+from utils.excel_utils import header_key
 
 IGNORE_LABEL = "(사용 안 함)"
 UNMATCHED_COLOR = QColor("#fff3b0")
-
-
-def header_key(name) -> str:
-    """'위도\n(36.123****) 소수점으로입력' → '위도', '대륙/해양 국문' → '대륙해양국문' 처럼 비교용 키로 정규화."""
-    name = re.split(r"[(（]", str(name), maxsplit=1)[0]
-    return re.sub(r"[\s/]", "", name).lower().removesuffix("명")
 
 
 def auto_map(excel_columns, columns, export_columns, saved: dict[str, str]) -> dict[str, str | None]:

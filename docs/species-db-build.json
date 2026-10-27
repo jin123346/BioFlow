@@ -1,0 +1,9 @@
+{
+  "source": "species_master.xlsx",
+  "source_bytes": 17612790,
+  "rows": 45542,
+  "columns": 53,
+  "database_bytes": 43016192,
+  "sha256": "7f4573ebf43b86333d80800f6727452e1fabcefe112888e2c8a58857c67a852a",
+  "schema_version": 1
+}

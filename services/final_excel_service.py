@@ -5,7 +5,7 @@ from copy import copy
 from openpyxl import load_workbook
 
 from config.paths import ASSETS_DIR
-from ui.widgets.column_mapping_dialog import header_key
+from utils.excel_utils import header_key
 
 
 def write_final_template(path, records, columns, kind):

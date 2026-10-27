@@ -1,0 +1,92 @@
+{
+  "source": "VWorld PARCEL live lookup, normalized service output; no credentials",
+  "queried_on": "2026-10-27",
+  "cases": [
+    {
+      "name": "seoul",
+      "latitude": "37.5665",
+      "longitude": "126.978",
+      "structure": {
+        "level0": "대한민국",
+        "level1": "서울특별시",
+        "level2": "중구",
+        "level3": "",
+        "level4L": "태평로1가",
+        "level4LC": "1114010300",
+        "level5": "31",
+        "detail": ""
+      },
+      "text": "서울특별시 중구 태평로1가 31"
+    },
+    {
+      "name": "anyang",
+      "latitude": "37.3943",
+      "longitude": "126.9568",
+      "structure": {
+        "level0": "대한민국",
+        "level1": "경기도",
+        "level2": "안양시 동안구",
+        "level3": "",
+        "level4L": "관양동",
+        "level4LC": "4117310200",
+        "level5": "1590",
+        "detail": ""
+      },
+      "text": "경기도 안양시 동안구 관양동 1590"
+    },
+    {
+      "name": "dongnae",
+      "latitude": "35.2056",
+      "longitude": "129.0835",
+      "structure": {
+        "level0": "대한민국",
+        "level1": "부산광역시",
+        "level2": "동래구",
+        "level3": "",
+        "level4L": "복천동",
+        "level4LC": "2626010500",
+        "level5": "381",
+        "detail": ""
+      },
+      "text": "부산광역시 동래구 복천동 381"
+    },
+    {
+      "name": "gyeongju",
+      "latitude": "35.8562",
+      "longitude": "129.2247",
+      "structure": {
+        "level0": "대한민국",
+        "level1": "경상북도",
+        "level2": "경주시",
+        "level3": "",
+        "level4L": "동천동",
+        "level4LC": "4713012600",
+        "level5": "800",
+        "detail": ""
+      },
+      "text": "경상북도 경주시 동천동 800"
+    },
+    {
+      "name": "namhae",
+      "latitude": "34.8375",
+      "longitude": "127.8924",
+      "structure": {
+        "level0": "대한민국",
+        "level1": "경상남도",
+        "level2": "남해군",
+        "level3": "",
+        "level4L": "남해읍",
+        "level4LC": "4884025022",
+        "level5": "24-1",
+        "detail": ""
+      },
+      "text": "경상남도 남해군 남해읍 서변리 24-1"
+    },
+    {
+      "name": "sea",
+      "latitude": "33.0",
+      "longitude": "130.0",
+      "error_code": "not_found"
+    }
+  ]
+}

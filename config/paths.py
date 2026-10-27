@@ -41,6 +41,7 @@ META_DIR= DATA_DIR / 'meta'
 HISTORY_DIR= MASTER_DIR / 'history'
 
 MASTER_FILE_PATH= MASTER_DIR / 'species_master.xlsx'
+MASTER_DB_PATH = MASTER_DIR / 'species_master.sqlite'
 LOCAL_VERSION_FILE_PATH= META_DIR / 'local_version.json'
 LOCAL_VERSION_HISTORY_FILE_PATH = META_DIR / "local_version_history.json"
 MASTER_CACHE_FILE = CACHE_DIR / "master.pkl"
@@ -64,11 +65,15 @@ def ensure_data_seeded():
     if not FROZEN or not BUNDLED_DATA_DIR.exists():
         return
     if DATA_DIR.exists():
-        # Existing installs retain their data while receiving a newly added reference.
-        source = BUNDLED_DATA_DIR / "classification"
-        target = DATA_DIR / "classification"
-        if source.exists() and not target.exists():
-            shutil.copytree(source, target)
+        # Existing installs retain user data while receiving newly bundled references.
+        for relative in (Path("classification"), Path("master") / "species_master.sqlite"):
+            source = BUNDLED_DATA_DIR / relative
+            target = DATA_DIR / relative
+            if source.is_dir() and not target.exists():
+                shutil.copytree(source, target)
+            elif source.is_file() and not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
         return
 
     def _skip_user_state(_src_dir: str, names: list[str]) -> set[str]:

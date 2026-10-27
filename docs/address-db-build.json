@@ -1,0 +1,1100 @@
+{
+  "source": "영문주소정리_new.xlsx",
+  "source_bytes": 420825253,
+  "sheets": [
+    {
+      "name": "부산",
+      "rows": 297431,
+      "unique_codes": 249
+    },
+    {
+      "name": "충청북도",
+      "rows": 340865,
+      "unique_codes": 1505
+    },
+    {
+      "name": "충청남도",
+      "rows": 499896,
+      "unique_codes": 2093
+    },
+    {
+      "name": "대구",
+      "rows": 228796,
+      "unique_codes": 382
+    },
+    {
+      "name": "대전",
+      "rows": 111984,
+      "unique_codes": 174
+    },
+    {
+      "name": "강원",
+      "rows": 370359,
+      "unique_codes": 1285
+    },
+    {
+      "name": "경상북도",
+      "rows": 724109,
+      "unique_codes": 2986
+    },
+    {
+      "name": "경상남도",
+      "rows": 657689,
+      "unique_codes": 2175
+    },
+    {
+      "name": "경기도",
+      "rows": 1033806,
+      "unique_codes": 1969
+    },
+    {
+      "name": "인천",
+      "rows": 183116,
+      "unique_codes": 259
+    },
+    {
+      "name": "제주",
+      "rows": 158273,
+      "unique_codes": 184
+    },
+    {
+      "name": "전라북도",
+      "rows": 439069,
+      "unique_codes": 1715
+    },
+    {
+      "name": "전남광주",
+      "rows": 723482,
+      "unique_codes": 2938
+    },
+    {
+      "name": "세종시",
+      "rows": 27958,
+      "unique_codes": 140
+    },
+    {
+      "name": "서울",
+      "rows": 523003,
+      "unique_codes": 467
+    },
+    {
+      "name": "울산",
+      "rows": 104797,
+      "unique_codes": 190
+    }
+  ],
+  "source_rows": 6424633,
+  "unique_codes": 18711,
+  "unique_combinations": 18742,
+  "conflicts": [
+    {
+      "code": "2671025027",
+      "variants": [
+        {
+          "names": [
+            "Busan",
+            "",
+            "Gijang-gun",
+            "Gijang-eup",
+            "Cheonggang-ri"
+          ],
+          "count": 557,
+          "first_source": [
+            "부산",
+            283743
+          ]
+        },
+        {
+          "names": [
+            "Busan",
+            "",
+            "Gijang-gun",
+            "Gijang-eup",
+            "Daera-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "부산",
+            283887
+          ]
+        }
+      ]
+    },
+    {
+      "code": "2671025324",
+      "variants": [
+        {
+          "names": [
+            "Busan",
+            "",
+            "Gijang-gun",
+            "Jangan-eup",
+            "Ballyong-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "부산",
+            286384
+          ]
+        },
+        {
+          "names": [
+            "Busan",
+            "",
+            "Gijang-gun",
+            "Jangan-eup",
+            "Jwadong-ri"
+          ],
+          "count": 141,
+          "first_source": [
+            "부산",
+            286345
+          ]
+        }
+      ]
+    },
+    {
+      "code": "3171038029",
+      "variants": [
+        {
+          "names": [
+            "Ulsan",
+            "",
+            "Ulju-gun",
+            "Sangbuk-myeon",
+            "Geo-ri"
+          ],
+          "count": 299,
+          "first_source": [
+            "울산",
+            101818
+          ]
+        },
+        {
+          "names": [
+            "Ulsan",
+            "",
+            "Ulju-gun",
+            "Sangbuk-myeon",
+            "Gilcheon-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "울산",
+            101838
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4122025930",
+      "variants": [
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Pyeongtaek-si",
+            "Cheongbuk-eup",
+            "Hansan-ri"
+          ],
+          "count": 307,
+          "first_source": [
+            "경기도",
+            223357
+          ]
+        },
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Pyeongtaek-si",
+            "Cheongbuk-eup",
+            "Yulbuk-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경기도",
+            223418
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4146134023",
+      "variants": [
+        {
+          "names": [
+            "Gyeonggi-do",
+            "Yongin-si",
+            "Cheoin-gu",
+            "Wonsam-myeon",
+            "Jwahang-ri"
+          ],
+          "count": 511,
+          "first_source": [
+            "경기도",
+            495942
+          ]
+        },
+        {
+          "names": [
+            "Gyeonggi-do",
+            "Yongin-si",
+            "Cheoin-gu",
+            "Wonsam-myeon",
+            "Mipyeong-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경기도",
+            495959
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4150034028",
+      "variants": [
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Icheon-si",
+            "Majang-myeon",
+            "Hoeeok-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경기도",
+            607771
+          ]
+        },
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Icheon-si",
+            "Majang-myeon",
+            "Ichi-ri"
+          ],
+          "count": 402,
+          "first_source": [
+            "경기도",
+            607617
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4155034038",
+      "variants": [
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Anseong-si",
+            "Miyang-myeon",
+            "Boche-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경기도",
+            640146
+          ]
+        },
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Anseong-si",
+            "Miyang-myeon",
+            "Yangbyeon-ri"
+          ],
+          "count": 230,
+          "first_source": [
+            "경기도",
+            639916
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4155035033",
+      "variants": [
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Anseong-si",
+            "Daedeok-myeon",
+            "Sillyeong-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경기도",
+            642943
+          ]
+        },
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Anseong-si",
+            "Daedeok-myeon",
+            "Sonae-ri"
+          ],
+          "count": 231,
+          "first_source": [
+            "경기도",
+            642942
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4157025626",
+      "variants": [
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Gimpo-si",
+            "Yangchon-eup",
+            "Daepo-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경기도",
+            682488
+          ]
+        },
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Gimpo-si",
+            "Yangchon-eup",
+            "Hagun-ri"
+          ],
+          "count": 2143,
+          "first_source": [
+            "경기도",
+            681650
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4165031022",
+      "variants": [
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Pocheon-si",
+            "Gunnae-myeon",
+            "Jwaui-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경기도",
+            868598
+          ]
+        },
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Pocheon-si",
+            "Gunnae-myeon",
+            "Yongjeong-ri"
+          ],
+          "count": 386,
+          "first_source": [
+            "경기도",
+            868526
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4183040030",
+      "variants": [
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Yangpyeong-gun",
+            "Yongmun-myeon",
+            "Johyeon-ri"
+          ],
+          "count": 453,
+          "first_source": [
+            "경기도",
+            1029147
+          ]
+        },
+        {
+          "names": [
+            "Gyeonggi-do",
+            "",
+            "Yangpyeong-gun",
+            "Yongmun-myeon",
+            "Yeonsu-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경기도",
+            1029600
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4311232023",
+      "variants": [
+        {
+          "names": [
+            "Chungcheongbuk-do",
+            "Cheongju-si",
+            "Seowon-gu",
+            "Hyeondo-myeon",
+            "Jugam-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "충청북도",
+            44269
+          ]
+        },
+        {
+          "names": [
+            "Chungcheongbuk-do",
+            "Cheongju-si",
+            "Seowon-gu",
+            "Hyeondo-myeon",
+            "Jukjeon-ri"
+          ],
+          "count": 267,
+          "first_source": [
+            "충청북도",
+            44231
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4420025031",
+      "variants": [
+        {
+          "names": [
+            "Chungcheongnam-do",
+            "",
+            "Asan-si",
+            "Yeomchi-eup",
+            "Banghyeon-ri"
+          ],
+          "count": 392,
+          "first_source": [
+            "충청남도",
+            149671
+          ]
+        },
+        {
+          "names": [
+            "Chungcheongnam-do",
+            "",
+            "Asan-si",
+            "Yeomchi-eup",
+            "Songgok-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "충청남도",
+            149957
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4420039025",
+      "variants": [
+        {
+          "names": [
+            "Chungcheongnam-do",
+            "",
+            "Asan-si",
+            "Seonjang-myeon",
+            "Janggot-ri"
+          ],
+          "count": 78,
+          "first_source": [
+            "충청남도",
+            177896
+          ]
+        },
+        {
+          "names": [
+            "Chungcheongnam-do",
+            "",
+            "Asan-si",
+            "Seonjang-myeon",
+            "Sindeok-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "충청남도",
+            177960
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4427032021",
+      "variants": [
+        {
+          "names": [
+            "Chungcheongnam-do",
+            "",
+            "Dangjin-si",
+            "Seongmun-myeon",
+            "Janggohang-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "충청남도",
+            288566
+          ]
+        },
+        {
+          "names": [
+            "Chungcheongnam-do",
+            "",
+            "Dangjin-si",
+            "Seongmun-myeon",
+            "Tongjeong-ri"
+          ],
+          "count": 596,
+          "first_source": [
+            "충청남도",
+            288334
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4427034028",
+      "variants": [
+        {
+          "names": [
+            "Chungcheongnam-do",
+            "",
+            "Dangjin-si",
+            "Jeongmi-myeon",
+            "Haseong-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "충청남도",
+            294687
+          ]
+        },
+        {
+          "names": [
+            "Chungcheongnam-do",
+            "",
+            "Dangjin-si",
+            "Jeongmi-myeon",
+            "Sanseong-ri"
+          ],
+          "count": 114,
+          "first_source": [
+            "충청남도",
+            294613
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4711125028",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "Pohang-si",
+            "Nam-gu",
+            "Guryongpo-eup",
+            "Byeongpo-ri"
+          ],
+          "count": 523,
+          "first_source": [
+            "경상북도",
+            19340
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "Pohang-si",
+            "Nam-gu",
+            "Guryongpo-eup",
+            "Guryongpo-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상북도",
+            19497
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4713025936",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Gyeongju-si",
+            "Oedong-eup",
+            "Munsan-ri"
+          ],
+          "count": 491,
+          "first_source": [
+            "경상북도",
+            129661
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Gyeongju-si",
+            "Oedong-eup",
+            "Seokgye-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상북도",
+            129735
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4723032028",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Yeongcheon-si",
+            "Sinnyeong-myeon",
+            "Maeyang-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상북도",
+            345277
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Yeongcheon-si",
+            "Sinnyeong-myeon",
+            "Wanjeon-ri"
+          ],
+          "count": 338,
+          "first_source": [
+            "경상북도",
+            345151
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4729025333",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Gyeongsan-si",
+            "Jillyang-eup",
+            "Damun-ri"
+          ],
+          "count": 238,
+          "first_source": [
+            "경상북도",
+            462886
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Gyeongsan-si",
+            "Jillyang-eup",
+            "Sinje-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상북도",
+            462994
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4729025339",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Gyeongsan-si",
+            "Jillyang-eup",
+            "Gwangseok-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상북도",
+            463659
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Gyeongsan-si",
+            "Jillyang-eup",
+            "Muncheon-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상북도",
+            463672
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Gyeongsan-si",
+            "Jillyang-eup",
+            "Sinje-ri"
+          ],
+          "count": 124,
+          "first_source": [
+            "경상북도",
+            463586
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4773040040",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Uiseong-gun",
+            "Gucheon-myeon",
+            "Cheongsan-ri"
+          ],
+          "count": 100,
+          "first_source": [
+            "경상북도",
+            504059
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Uiseong-gun",
+            "Gucheon-myeon",
+            "Joseong-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상북도",
+            504082
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4793031025",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Uljin-gun",
+            "Buk-myeon",
+            "Bugu-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상북도",
+            705717
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangbuk-do",
+            "",
+            "Uljin-gun",
+            "Buk-myeon",
+            "Deokgu-ri"
+          ],
+          "count": 186,
+          "first_source": [
+            "경상북도",
+            705553
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4822036024",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Tongyeong-si",
+            "Hansan-myeon",
+            "Changjwa-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상남도",
+            197482
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Tongyeong-si",
+            "Hansan-myeon",
+            "Haso-ri"
+          ],
+          "count": 226,
+          "first_source": [
+            "경상남도",
+            197453
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4824035022",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Sacheon-si",
+            "Gonyang-myeon",
+            "Nammunoe-ri"
+          ],
+          "count": 133,
+          "first_source": [
+            "경상남도",
+            223634
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Sacheon-si",
+            "Gonyang-myeon",
+            "Seongnae-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상남도",
+            223662
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4825033028",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Gimhae-si",
+            "Jillye-myeon",
+            "Sanbon-ri"
+          ],
+          "count": 10,
+          "first_source": [
+            "경상남도",
+            267776
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Gimhae-si",
+            "Jillye-myeon",
+            "Songhyeon-ri"
+          ],
+          "count": 566,
+          "first_source": [
+            "경상남도",
+            267617
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4833031024",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Yangsan-si",
+            "Dong-myeon",
+            "Naesong-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상남도",
+            381224
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Yangsan-si",
+            "Dong-myeon",
+            "Sasong-ri"
+          ],
+          "count": 100,
+          "first_source": [
+            "경상남도",
+            381206
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4833031025",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Yangsan-si",
+            "Dong-myeon",
+            "Naesong-ri"
+          ],
+          "count": 227,
+          "first_source": [
+            "경상남도",
+            381308
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Yangsan-si",
+            "Dong-myeon",
+            "Sasong-ri"
+          ],
+          "count": 2,
+          "first_source": [
+            "경상남도",
+            381307
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4833034024",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Yangsan-si",
+            "Habuk-myeon",
+            "Dapgok-ri"
+          ],
+          "count": 138,
+          "first_source": [
+            "경상남도",
+            390901
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Yangsan-si",
+            "Habuk-myeon",
+            "Sunji-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상남도",
+            391039
+          ]
+        }
+      ]
+    },
+    {
+      "code": "4873032029",
+      "variants": [
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Haman-gun",
+            "Gunbuk-myeon",
+            "Sado-ri"
+          ],
+          "count": 197,
+          "first_source": [
+            "경상남도",
+            424445
+          ]
+        },
+        {
+          "names": [
+            "Gyeongsangnam-do",
+            "",
+            "Haman-gun",
+            "Gunbuk-myeon",
+            "Wolchon-ri"
+          ],
+          "count": 1,
+          "first_source": [
+            "경상남도",
+            424561
+          ]
+        }
+      ]
+    }
+  ],
+  "conflict_policy": "retain_all_variants_and_block_automatic_mapping",
+  "automatically_mappable_codes": 18681,
+  "database_bytes": 1232896,
+  "duplicate_rows_removed": 6405891,
+  "database_sha256": "a5d86e0658670fbea5888c30d9a47864a3e2b20418cf85001f1483b9ea65860e"
+}

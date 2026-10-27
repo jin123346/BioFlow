@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config.paths import LOCAL_VERSION_FILE_PATH, MASTER_FILE_PATH
+from config.paths import LOCAL_VERSION_FILE_PATH, MASTER_DB_PATH
 from services.data_update_service import LOCAL_VERSION_FILE
 from ui.widgets.recent_file_dialog import RecentFileDialog as QFileDialog
 from services.species_master_service import SpeciesMasterService
@@ -165,7 +165,7 @@ class SpeciesMasterTab(QWidget):
         return search_widget
 
     def search_species(self):
-        if self.df is None:
+        if self.df is None and not self.master_service.exists():
             self.search_result_label.setText("종정보 마스터가 로드되지 않았습니다.")
             return
 
@@ -175,7 +175,8 @@ class SpeciesMasterTab(QWidget):
             self.search_result_label.setText("검색어를 하나 이상 입력해 주세요.")
             return
 
-        result_df = self.master_service.search(self.df, filters)
+        result_df = (self.master_service.search(self.df, filters) if self.df is not None
+                     else self.master_service.search_database(filters))
         self.df_search_result = result_df
         populate_table_widget(self.search_result_table, result_df.head(200))
         self.search_result_label.setText(f"검색 결과 : {len(result_df)}건 (최대 200건 표시)")
@@ -267,7 +268,8 @@ class SpeciesMasterTab(QWidget):
             self.append_log(f"백업 저장 성공 : {result['backup_path']}")
             self.append_log(f"버전 정보 저장 성공 : {result['version_path']}")
             self.refresh_version_info_label()
-            self.master_changed.emit(self.df)
+            self.df = None
+            self.master_changed.emit(None)
         except Exception as e:
             self.append_log(f"로컬 저장 실패 : {str(e)}")
 
@@ -298,12 +300,12 @@ class SpeciesMasterTab(QWidget):
         QApplication.processEvents()
 
         try:
-            df = self.master_service.load_last_master()
-            self.df = df
-
-            self.master_file_path.setText(str(MASTER_FILE_PATH))
+            df, total = self.master_service.preview(200)
+            self.df = None
+            self.master_file_path.setText(str(MASTER_DB_PATH))
             self.append_log("종정보 마스터 로드 성공")
-            self.show_dataframe_preview(df)
+            populate_table_widget(self.preview_table, df)
+            self.preview_info_label.setText(f"종정보 마스터 총 {total:,}건 · 상위 {len(df):,}건 표시 · 상세 조회는 종 검색 탭에서 가능합니다.")
             self.status_label.setText("로드 완료")
             self.status_label.setStyleSheet("color: red;")
 
@@ -313,11 +315,12 @@ class SpeciesMasterTab(QWidget):
 
     def reload_master(self):
         try:
-            df = self.master_service.reload_master()
-            self.df = df
-            self.show_dataframe_preview(df)
+            df, total = self.master_service.preview(200)
+            self.df = None
+            populate_table_widget(self.preview_table, df)
+            self.preview_info_label.setText(f"종정보 마스터 총 {total:,}건 · 상위 {len(df):,}건 표시")
             self.append_log("재로딩 완료")
-            self.master_changed.emit(df)
+            self.master_changed.emit(None)
         except Exception as e:
             self.append_log(f"재로딩 실패: {str(e)}")
 

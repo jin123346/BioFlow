@@ -115,6 +115,52 @@ class MediaExportTests(unittest.TestCase):
                 finally:
                     editor.close()
 
+    def test_changed_destination_reads_original_not_previous_export(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            original = root / "source" / "original.jpg"
+            previous = root / "previous" / "DB.jpg"
+            original.parent.mkdir()
+            previous.parent.mkdir()
+            original.write_bytes(b"immutable original")
+            previous.write_bytes(b"stale previous export")
+            editor, table, columns = self.editor(previous, root / "new")
+            table.item(0, columns.index("원본경로")).setText(str(original))
+            try:
+                self.assertTrue(editor.prepare_media_for_excel_export(False))
+                saved = Path(table.item(0, columns.index("파일경로")).text())
+                self.assertEqual(saved.parent, root / "new")
+                self.assertEqual(saved.read_bytes(), b"immutable original")
+                self.assertEqual(original.read_bytes(), b"immutable original")
+                self.assertEqual(previous.read_bytes(), b"stale previous export")
+            finally:
+                editor.close()
+
+    def test_original_path_is_input_and_output_path_is_set_only_on_export(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            original = root / "source" / "clip.mp4"
+            original.parent.mkdir()
+            original.write_bytes(b"immutable video")
+            destination = root / "export"
+            editor, table, columns = self.editor(original, destination, media_type="동영상")
+            try:
+                table.item(0, columns.index("원본경로")).setText(str(original))
+                table.item(0, columns.index("파일경로")).setText("")
+                editor.capture_pending_video_thumbnails = Mock(return_value=(0, 0, 0, 0))
+
+                self.assertEqual(table.item(0, columns.index("파일경로")).text(), "")
+                self.assertTrue(editor.prepare_media_for_excel_export(False, capture=False))
+
+                saved = destination / "12345" / "TEST-SP-BI-260100100.mp4"
+                self.assertEqual(Path(table.item(0, columns.index("파일경로")).text()), saved)
+                self.assertEqual(table.item(0, columns.index("원본경로")).text(), str(original))
+                self.assertEqual(table.item(0, columns.index("동영상 파일명")).text(), saved.name)
+                self.assertEqual(original.read_bytes(), b"immutable video")
+                self.assertEqual(saved.read_bytes(), b"immutable video")
+            finally:
+                editor.close()
+
     def test_no_media_does_not_ask_for_destination(self):
         for specimen in (False, True):
             editor, table, columns = self.editor(Path("unused.jpg"), Path("unused"), specimen)
@@ -138,6 +184,24 @@ class MediaExportTests(unittest.TestCase):
                     chooser.assert_not_called()
             finally:
                 editor.close()
+
+    def test_row_edit_never_prompts_for_or_copies_media(self):
+        for specimen in (False, True):
+            with self.subTest(specimen=specimen), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                source = root / "original.jpg"
+                source.write_bytes(b"original")
+                editor, _, _ = self.editor(source, root / "output", specimen)
+                values = {"파일경로": str(source), "원본경로": str(source)}
+                prepare = editor.prepare_image_for_specimen_record if specimen else editor.prepare_media_for_record
+                try:
+                    with patch("ui.tabs.upload_tab.QFileDialog.getExistingDirectory") as chooser:
+                        self.assertIs(prepare(values), values)
+                        chooser.assert_not_called()
+                    self.assertFalse((root / "output").exists())
+                    self.assertEqual(source.read_bytes(), b"original")
+                finally:
+                    editor.close()
 
     def test_missing_source_stops_export(self):
         with tempfile.TemporaryDirectory() as folder:

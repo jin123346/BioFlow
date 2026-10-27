@@ -1,0 +1,23 @@
+{
+  "baseline": {
+    "directory": "cache\\address-baseline\\dist\\BioFlow-2.0.1",
+    "file_count": 1033,
+    "uncompressed_bytes": 621134473,
+    "exe_bytes": 8197165,
+    "zip": "cache\\address-baseline\\dist\\BioFlow-2.0.1.zip",
+    "zip_bytes": 250225105
+  },
+  "optimized": {
+    "directory": "dist\\address-optimized\\BioFlow-2.0.1",
+    "file_count": 1033,
+    "uncompressed_bytes": 621991068,
+    "exe_bytes": 8200640,
+    "zip": "dist\\address-optimized\\BioFlow-2.0.1.zip",
+    "zip_bytes": 250163513
+  },
+  "database_bytes": 1232896,
+  "database_zip_bytes": 249495,
+  "database_sha256": "a5d86e0658670fbea5888c30d9a47864a3e2b20418cf85001f1483b9ea65860e",
+  "delta_uncompressed_bytes": 856595,
+  "delta_zip_bytes": -61592
+}

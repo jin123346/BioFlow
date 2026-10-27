@@ -54,6 +54,7 @@ data/*
 !data/master/
 data/master/*
 !data/master/species_master.xlsx
+!data/master/species_master.sqlite
 !data/institution/
 data/institution/*
 !data/institution/institution.json
@@ -65,6 +66,9 @@ data/reference/*
 data/classification/*
 !data/classification/master.json
 !data/classification/version.json
+!data/address/
+data/address/*
+!data/address/english_admin.sqlite
 output/
 temp/
 cache/

@@ -15,7 +15,7 @@ logger = logging.getLogger("bioflow.data_update")
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/jin123346/BioFlow/main"
 REMOTE_VERSION_URL = f"{GITHUB_RAW_BASE}/data/version.json"
-REMOTE_MASTER_URL = f"{GITHUB_RAW_BASE}/data/master/species_master.xlsx"
+REMOTE_MASTER_URL = f"{GITHUB_RAW_BASE}/data/master/species_master.sqlite"
 REMOTE_ORGANIZATIONS_URL = f"{GITHUB_RAW_BASE}/data/reference/organizations.json"
 REMOTE_PROJECTS_URL = f"{GITHUB_RAW_BASE}/data/reference/upload_projects.json"
 REMOTE_CLASSIFICATION_VERSION_URL = f"{GITHUB_RAW_BASE}/data/classification/version.json"
@@ -134,14 +134,16 @@ def apply_classification_update(remote):
 
 
 def apply_update(remote_info: dict[str, Any]) -> None:
-    """원격 species_master.xlsx / organizations.json을 내려받아 로컬에 그대로 덮어쓰고,
-    사업 목록(upload_projects.json)은 사용자가 직접 추가했을 수 있어 덮어쓰지 않고 병합."""
+    """Download, validate and atomically replace the complete species SQLite."""
+    expected_sha = remote_info.get("species_sha256") or remote_info.get("sha256")
+    expected_rows = remote_info.get("species_rows") or remote_info.get("row_count")
+    if not expected_sha or expected_rows is None:
+        raise ValueError("원격 종정보 버전 정보에 해시 또는 행 수가 없습니다.")
     with tempfile.TemporaryDirectory() as tmp_dir:
-        master_tmp = Path(tmp_dir) / "species_master.xlsx"
-        master_tmp.write_bytes(_fetch_bytes(REMOTE_MASTER_URL, timeout=30))
+        master_tmp = Path(tmp_dir) / "species_master.sqlite"
+        master_tmp.write_bytes(_fetch_bytes(remote_info.get("species_url", REMOTE_MASTER_URL), timeout=60))
         service = SpeciesMasterService()
-        df = service.load_excel_file(str(master_tmp))
-        service.save_master_to_local(df, str(master_tmp))
+        service.install_database(master_tmp, expected_rows=expected_rows, expected_sha256=expected_sha)
 
         try:
             organizations_bytes = _fetch_bytes(REMOTE_ORGANIZATIONS_URL, timeout=15)

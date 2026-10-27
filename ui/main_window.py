@@ -24,8 +24,20 @@ class MainWindow(QMainWindow):
         self.resize(1200,800) #창 크기 설정
 
         self.init_ui()
+        self.check_address_reference()
+
+    def check_address_reference(self):
+        from services.english_address_service import AddressDatabaseError, EnglishAddressService
+        try:
+            EnglishAddressService().validate()
+        except AddressDatabaseError as exc:
+            # Nonfatal: users can still enter data and retrieve Korean addresses.
+            self.statusBar().showMessage(str(exc))
 
     def init_ui(self):
+        settings_menu = self.menuBar().addMenu("설정")
+        api_action = settings_menu.addAction("VWorld API 설정")
+        api_action.triggered.connect(self.open_api_settings)
         central = QWidget()
         self.setCentralWidget(central)
         root_layout = QHBoxLayout(central)
@@ -69,6 +81,10 @@ class MainWindow(QMainWindow):
         self.nav_list.currentRowChanged.connect(self.show_page)
         self.nav_list.setCurrentRow(0)
 
+    def open_api_settings(self):
+        from ui.dialogs.api_settings_dialog import ApiSettingsDialog
+        ApiSettingsDialog(self).exec()
+
     def ensure_page(self, index):
         if index not in self._loaded_pages:
             if index == 1:
@@ -107,6 +123,7 @@ class MainWindow(QMainWindow):
         review = self._loaded_pages.get(3)
         if review is not None:
             review._master_df = dataframe
+            review._master_fingerprint = None
 
     @property
     def master_tab(self):
