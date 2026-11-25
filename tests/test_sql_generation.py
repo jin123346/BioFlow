@@ -38,6 +38,18 @@ def sheet_of(*rows):
 
 
 class SQLGenerationTests(unittest.TestCase):
+    def test_specimen_image_uses_smpl_table_and_migrates_stale_mapping(self):
+        row = record("이미지", 기관코드="00123")
+        profile = profile_for("specimen_image", row)
+        self.assertEqual(profile["table"], "TB_SBD_SMPL_IMAGE_INFO")
+        profile["table"] = "TB_SBD_SPECS_IMAGE_INFO"
+
+        result = generate_sql(sheet_of(row), profile)[0]
+
+        self.assertEqual(result.status, "SUCCESS", result.error)
+        self.assertIn("INSERT INTO TB_SBD_SMPL_IMAGE_INFO", result.sql)
+        self.assertNotIn("TB_SBD_SPECS_IMAGE_INFO", result.sql)
+
     def test_confirmed_schema_and_image_key_length(self):
         for kind in PROFILES:
             profile = default_profile(kind)

@@ -11,6 +11,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QDialog
 
 from services.address_mapping_service import METADATA_KEY, apply_address, map_address, valid_metadata
+from services.english_address_service import EnglishAddressService
 from services.vworld_geocoding_service import GeocodingError, VWorldAddress
 from ui.dialogs.address_lookup_dialog import AddressLookupDialog, AddressPreviewDialog, AddressScopeDialog
 from ui.tabs.upload_tab import ADDRESS_FIELDS, SPECIMEN_ADDRESS_FIELDS, ROW_COLUMNS, SPECIMEN_ROW_COLUMNS, UploadTab
@@ -138,6 +139,37 @@ def test_batch_partial_failure_and_selected_form_sync(editor, specimen):
     assert METADATA_KEY in editor.table_to_records(table, columns)[0]
 
 
+@pytest.mark.parametrize("specimen", [False, True])
+def test_batch_english_lookup_supports_selected_rows(editor, specimen):
+    result = address()
+    table = editor.specimen_data_table if specimen else editor.data_table
+    columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
+    fields = SPECIMEN_ADDRESS_FIELDS if specimen else ADDRESS_FIELDS
+    add = editor.add_specimen_data_row if specimen else editor.add_data_row
+    prefix = "채집위치" if specimen else "관찰위치"
+    reference = EnglishAddressService().lookup(result.structure["level4LC"])
+    korean = map_address(result, specimen)[0]
+    for index in range(2):
+        add({"NO.": index + 1, "위도": result.latitude, "경도": result.longitude, **korean})
+
+    def lookup(parent, targets, is_specimen, differences_only=False, mode="all"):
+        assert is_specimen == specimen
+        assert mode == "english"
+        assert [row for row, _record in targets] == [1]
+        return {
+            row: apply_address(record, result, specimen, reference=reference, mode=mode)
+            for row, record in targets
+        }
+
+    with patch("ui.tabs.upload_tab.lookup_addresses", side_effect=lookup):
+        editor.batch_fill_addresses(
+            table, columns, fields, Mock(), scope="selected", selected_rows=[1], mode="english"
+        )
+
+    assert table.item(0, columns.index(f"{prefix} 시군구 영문")).text() == ""
+    assert table.item(1, columns.index(f"{prefix} 시군구 영문")).text() == "Dongan-gu, Anyang-si"
+
+
 def test_stale_input_not_applied(editor):
     result = address()
     editor.set_form_value("위도", result.latitude)
@@ -148,6 +180,38 @@ def test_stale_input_not_applied(editor):
     with patch("ui.tabs.upload_tab.lookup_addresses", side_effect=lookup):
         editor.fill_address_from_latlon()
     assert editor.get_form_value("관찰위치 시도 국문") == ""
+
+
+@pytest.mark.parametrize("specimen", [False, True])
+def test_separate_address_buttons_request_the_expected_mode(editor, specimen):
+    result = address()
+    widgets = editor.specimen_form_widgets if specimen else editor.form_widgets
+    prefix = "채집위치" if specimen else "관찰위치"
+    editor.set_form_value("위도", result.latitude, widgets)
+    editor.set_form_value("경도", result.longitude, widgets)
+
+    def korean_lookup(parent, targets, is_specimen, mode="all"):
+        assert is_specimen == specimen
+        assert mode == "korean"
+        return {0: apply_address(targets[0][1], result, specimen, mode=mode)}
+
+    korean_action = (editor.fill_specimen_korean_address_from_latlon if specimen
+                      else editor.fill_korean_address_from_latlon)
+    with patch("ui.tabs.upload_tab.lookup_addresses", side_effect=korean_lookup):
+        korean_action()
+    assert editor.get_form_value(f"{prefix} 시군구 국문", widgets) == "안양시 동안구"
+    assert editor.get_form_value(f"{prefix} 시군구 영문", widgets) == ""
+
+    reference = EnglishAddressService().lookup(result.structure["level4LC"])
+    def english_lookup(parent, targets, is_specimen, mode="all"):
+        assert mode == "english"
+        return {0: apply_address(targets[0][1], result, specimen, reference=reference, mode=mode)}
+
+    english_action = (editor.fill_specimen_english_address_from_latlon if specimen
+                       else editor.fill_english_address_from_latlon)
+    with patch("ui.tabs.upload_tab.lookup_addresses", side_effect=english_lookup):
+        english_action()
+    assert editor.get_form_value(f"{prefix} 시군구 영문", widgets) == "Dongan-gu, Anyang-si"
 
 
 def test_worker_failure_stops_remaining_requests(app):
@@ -265,3 +329,62 @@ def test_first_use_opens_settings_then_reuses_saved_key(app):
         settings.return_value.exec.assert_called_once()
         assert lookup.call_args.args[1] == "synthetic"
         assert updated[0]["관찰위치 시군구 국문"] == "안양시 동안구"
+
+
+def test_english_lookup_reuses_saved_legal_code_without_api_request(app):
+    from controllers.address_controller import lookup_addresses
+    result = address()
+    record = apply_address(
+        {"위도": result.latitude, "경도": result.longitude}, result, mode="korean"
+    )
+    planned = {0: {**record, "관찰위치 시도 영문": "Gyeonggi-do"}}
+
+    with patch("controllers.address_controller.ApiKeyService") as keys, \
+         patch("controllers.address_controller.AddressLookupDialog") as lookup, \
+         patch("controllers.address_controller.AddressPreviewDialog") as preview:
+        preview.return_value.exec.return_value = QDialog.Accepted
+        preview.return_value.planned_records.return_value = planned
+        updated = lookup_addresses(None, [(0, record)], mode="english")
+
+    keys.assert_not_called()
+    lookup.assert_not_called()
+    references = preview.call_args.args[5]
+    assert references[0].town == "Gwanyang-dong"
+    assert updated[0]["관찰위치 시도 영문"] == "Gyeonggi-do"
+
+
+def test_english_lookup_uses_registered_names_for_water_without_api(app):
+    from controllers.address_controller import lookup_addresses
+    record = {
+        "위도": "34.0", "경도": "127.0",
+        "관찰위치 시도 국문": "전라남도",
+        "관찰위치 시군구 국문": "여수시",
+        "관찰위치 읍면동 국문": "",
+        "관찰위치 상세 국문": "거문도 해상",
+    }
+    planned = {0: {**record, "관찰위치 시도 영문": "Jeollanam-do", "관찰위치 시군구 영문": "Yeosu-si"}}
+
+    with patch("controllers.address_controller.ApiKeyService") as keys, \
+         patch("controllers.address_controller.AddressLookupDialog") as lookup, \
+         patch("controllers.address_controller.AddressPreviewDialog") as preview:
+        preview.return_value.exec.return_value = QDialog.Accepted
+        preview.return_value.planned_records.return_value = planned
+        updated = lookup_addresses(None, [(0, record)], mode="english")
+
+    keys.assert_not_called()
+    lookup.assert_not_called()
+    reference = preview.call_args.args[5][0]
+    assert (reference.sido, reference.district, reference.town) == (
+        "Jeollanam-do", "Yeosu-si", ""
+    )
+    assert updated[0]["관찰위치 시군구 영문"] == "Yeosu-si"
+
+
+def test_registered_sido_is_available_without_district_or_town():
+    from controllers.address_controller import registered_english_address
+    registered = registered_english_address({"관찰위치 시도 국문": "인천광역시"})
+    assert registered is not None
+    _address, reference = registered
+    assert reference.sido == "Incheon"
+    assert reference.district == ""
+    assert reference.town == ""

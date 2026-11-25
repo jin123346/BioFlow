@@ -38,7 +38,7 @@ SQL 생성 메뉴는 엑셀 데이터를 Oracle INSERT 문으로 변환하고 �
 | 유형 | 테이블 | 연결 키 | 기본 SEQ |
 |---|---|---|---|
 | 관찰이미지 | TB_SBD_OBSRV_IMAGE_INFO | 관찰정보순번 → OBSRV_INFO_SEQ | 1 |
-| 표본이미지 | TB_SBD_SPECS_IMAGE_INFO | 종고유ID → SPECS_ESSNT_ID | 1 |
+| 표본이미지 | TB_SBD_SMPL_IMAGE_INFO | 표본정보순번 → SMPL_INFO_SEQ | 1 |
 | 관찰동영상 | TB_SBD_LVBNG_MVPCT_INFO | 종고유ID → SPECS_ESSNT_ID | 실행 시 연결 키별 MAX + 1 |
 | 관찰소리 | TB_SBD_LVBNG_SOUND_INFO | 종고유ID → SPECS_ESSNT_ID | 실행 시 연결 키별 MAX + 1 |
 

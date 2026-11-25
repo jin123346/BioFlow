@@ -25,6 +25,27 @@ class ClassificationService:
     def key(value):
         return " ".join(str(value or "").split()).casefold()
 
+    @staticmethod
+    def records():
+        """Return validated reference rows for read-only browsing."""
+        try:
+            payload = json.loads(CLASSIFICATION_FILE.read_text(encoding="utf-8"))
+            return [dict(record) for record in validate_records(payload)]
+        except OSError:
+            raise ValueError("분류군 기준자료 파일이 없습니다.") from None
+        except (json.JSONDecodeError, TypeError, KeyError):
+            raise ValueError("분류군 기준자료를 읽을 수 없습니다.") from None
+
+    @classmethod
+    def search_records(cls, records, keyword):
+        keyword = cls.key(keyword)
+        if not keyword:
+            return list(records)
+        return [
+            record for record in records
+            if any(keyword in cls.key(record.get(column)) for column in REQUIRED_COLUMNS)
+        ]
+
     def match(self, values):
         if not any(self.key(values.get(field)) for field in RANK_FIELDS[-1]):
             return None, "과 정보 없음"

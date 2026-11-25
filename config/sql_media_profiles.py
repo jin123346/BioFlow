@@ -65,7 +65,7 @@ PROFILES = {
     "observation_image": image_profile("관찰이미지", "TB_SBD_OBSRV_IMAGE_INFO", "OBSRV_INFO_SEQ", ("관찰정보순번",)),
     "observation_video": av_profile(True),
     "observation_sound": av_profile(False),
-    "specimen_image": image_profile("표본이미지", "TB_SBD_SPECS_IMAGE_INFO", "SMPL_INFO_SEQ", ("표본정보순번",), True),
+    "specimen_image": image_profile("표본이미지", "TB_SBD_SMPL_IMAGE_INFO", "SMPL_INFO_SEQ", ("표본정보순번",), True),
 }
 
 # Confirmed schema supplied by the user; shared by defaults and saved mappings.

@@ -1,11 +1,22 @@
 """Map structured VWorld results without altering provider administrative regions."""
 
 from copy import deepcopy
+from functools import lru_cache
 import re
 
 from services.coordinate_service import parse_coordinates
 
 METADATA_KEY = "_vworld_address"
+
+
+@lru_cache(maxsize=4096)
+def exact_master_english(level, korean_text):
+    """Use the standardized flat dictionary only for exact Korean matches."""
+    from services.address_master_service import AddressMasterService
+    if not hasattr(exact_master_english, "service"):
+        exact_master_english.service = AddressMasterService()
+    english, exact = exact_master_english.service.match_english(level, korean_text)
+    return english if exact else ""
 
 
 def address_detail_parts(address):
@@ -48,6 +59,7 @@ def map_address(address, specimen=False):
     }
     metadata = {
         "provider": "VWorld", "latitude": address.latitude, "longitude": address.longitude,
+        "text": address.text,
         "structure": dict(s), "city": city, "district": district,
         "legal_dong_code": s.get("level4LC", ""), "detail_aux": s.get("detail", ""),
         "ri_korean": ri, "parcel": parcel,
@@ -55,31 +67,51 @@ def map_address(address, specimen=False):
     return fields, metadata
 
 
-def apply_address(record, address, specimen=False, overwrite=False, reference=None):
+def apply_address(record, address, specimen=False, overwrite=False, reference=None, mode="all"):
+    if mode not in {"all", "korean", "english"}:
+        raise ValueError(f"Unsupported address mode: {mode}")
     fields, metadata = map_address(address, specimen)
     updated = deepcopy(record)
-    for field, value in fields.items():
-        if value and (overwrite or not str(record.get(field, "") or "").strip()):
-            updated[field] = value
+    if mode in {"all", "korean"}:
+        for field, value in fields.items():
+            if value and (overwrite or not str(record.get(field, "") or "").strip()):
+                updated[field] = value
     metadata["applied_fields"] = {field: str(updated.get(field, "") or "") for field in fields}
     metadata["matches_displayed_address"] = all(
         not value or metadata["applied_fields"][field] == value for field, value in fields.items()
     )
-    metadata["write_fields"] = list(fields)
-    if reference is not None:
+    metadata["write_fields"] = list(fields) if mode in {"all", "korean"} else []
+    if mode in {"all", "english"} and reference is not None:
         from services.english_address_service import english_fields
         prefix = "채집위치" if specimen else "관찰위치"
-        aligned = all(updated.get(f"{prefix} {part} 국문", "") == fields[f"{prefix} {part} 국문"]
-                      for part in ("시도", "시군구", "읍면동"))
-        if aligned:
-            translations = english_fields(address, reference, specimen)
-            for field, value in translations.items():
-                korean_field = field.replace("영문", "국문")
-                if updated.get(korean_field, "") != fields.get(korean_field, ""):
-                    continue
-                if value and (overwrite or not str(updated.get(field, "") or "").strip()):
-                    updated[field] = value
-                    metadata["write_fields"].append(field)
+        aligned = all(
+            updated.get(f"{prefix} {part} 국문", "") == fields[f"{prefix} {part} 국문"]
+            for part in ("시도", "시군구", "읍면동")
+        )
+        translations = english_fields(address, reference, specimen)
+        levels = {"시도": "sido", "시군구": "sigungu", "읍면동": "eupmyeondong", "상세": "detail"}
+        for field, reference_value in translations.items():
+            if mode == "all" and not aligned and field != "국가영문명":
+                continue
+            korean_field = field.replace("영문", "국문")
+            part = next((name for name in levels if f" {name} " in field), None)
+            standard_value = exact_master_english(levels[part], updated.get(korean_field, "")) if part else ""
+            # Exact standard-name matches are safe even when VWorld uses a newer
+            # province label. Otherwise retain the strict provider alignment.
+            if standard_value:
+                value = standard_value
+            elif mode == "english":
+                # English-only lookup is an explicit, preview-confirmed action.
+                # Apply the retrieved structural/detail value even when a
+                # free-text Korean detail does not equal the provider string.
+                value = reference_value
+            elif updated.get(korean_field, "") == fields.get(korean_field, ""):
+                value = reference_value
+            else:
+                continue
+            if value and (overwrite or not str(updated.get(field, "") or "").strip()):
+                updated[field] = value
+                metadata["write_fields"].append(field)
     updated[METADATA_KEY] = metadata
     return updated
 

@@ -44,6 +44,9 @@ def apply_image_sequence_rule(profile):
     if profile["kind"] in ("observation_image", "specimen_image"):
         expected = PROFILES[profile["kind"]]
         old_key = profile["key"]
+        # Canonical image table names are schema facts, not user mappings.
+        # This also migrates mappings saved before a table-name correction.
+        profile["table"] = expected["table"]
         profile["key"] = expected["key"]
         if not profile.get("nas_template"):
             profile["nas_template"] = expected["nas_template"]

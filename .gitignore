@@ -69,6 +69,7 @@ data/classification/*
 !data/address/
 data/address/*
 !data/address/english_admin.sqlite
+!data/address/영문주소_정리.xlsx
 output/
 temp/
 cache/

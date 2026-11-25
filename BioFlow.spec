@@ -122,11 +122,16 @@ coll = COLLECT(
     name=f'BioFlow-{APP_VERSION}',
 )
 
-# Keep the immutable address reference beside the EXE, outside the embedded
-# archive and outside user-data seeding. Never package either source workbook.
+# Keep the immutable address references beside the EXE, outside the embedded
+# archive and outside user-data seeding. Package only the small standardized
+# name dictionary; never package the 420MB expanded source workbook.
 _address_db = Path('data/address/english_admin.sqlite')
 if not _address_db.is_file():
     raise FileNotFoundError('Build the English address reference with tools/build_address_db.py first')
 _address_destination = Path(coll.name) / 'data' / 'address'
 _address_destination.mkdir(parents=True, exist_ok=True)
 shutil.copy2(_address_db, _address_destination / _address_db.name)
+_address_names = Path('data/address/영문주소_정리.xlsx')
+if not _address_names.is_file():
+    raise FileNotFoundError('The standardized English address dictionary is missing')
+shutil.copy2(_address_names, _address_destination / _address_names.name)

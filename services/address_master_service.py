@@ -4,10 +4,10 @@ import logging
 
 import pandas as pd
 
-from config.paths import CACHE_DIR, DATA_DIR
+from config.paths import CACHE_DIR, DATA_DIR, EXECUTABLE_DIR, FROZEN
 from utils.text_utils import normalize_text
 
-ADDRESS_FILE = DATA_DIR / "address" / "영문주소_정리.xlsx"
+ADDRESS_FILE = (EXECUTABLE_DIR if FROZEN else DATA_DIR) / "address" / "영문주소_정리.xlsx"
 ADDRESS_CACHE_FILE = CACHE_DIR / "address_lookup.json"
 
 # level -> [(시트명, 국문 컬럼, 영문 컬럼), ...] — 여러 시트를 한 레벨로 풀링

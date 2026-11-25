@@ -23,8 +23,10 @@ def package(baseline, optimized, report):
     db = optimized / "data/address/english_admin.sqlite"
     if not db.is_file():
         raise ValueError("Missing external address database")
-    if list(optimized.rglob("*new.xlsx")) or list(optimized.rglob("영문주소_정리.xlsx")):
-        raise ValueError("Address source workbook must not be distributed")
+    if list(optimized.rglob("*new.xlsx")):
+        raise ValueError("The expanded address source workbook must not be distributed")
+    if len(list(optimized.rglob("영문주소_정리.xlsx"))) != 1:
+        raise ValueError("Expected one standardized English address dictionary")
     if len(list(optimized.rglob("english_admin.sqlite"))) != 1:
         raise ValueError("Expected one external database copy")
     db_zip = io.BytesIO()

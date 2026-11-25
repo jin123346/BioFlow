@@ -1,6 +1,7 @@
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -74,6 +75,7 @@ def test_english_mapping_uses_only_structural_names(reference):
     result = reference.lookup("0012345678")
     address = VWorldAddress({"level5": "1590"}, "", "37", "127")
     fields = english_fields(address, result)
+    assert fields["국가영문명"] == "Republic of Korea"
     assert fields["관찰위치 시군구 영문"] == "Dongan-gu, Anyang-si"
     assert fields["관찰위치 상세 영문"] == "1590"
     address.structure["level5"] = "개인 현장 기록"
@@ -138,3 +140,67 @@ def test_apply_english_only_to_matching_korean_and_preserve_manual(reference):
     assert '관찰위치 시군구 영문' not in mismatch
     overwrite = apply_address({'관찰위치 시도 영문':'Manual'}, address, reference=result, overwrite=True)
     assert overwrite['관찰위치 시도 영문'] == 'Gyeonggi-do'
+
+
+def test_korean_and_english_lookup_modes_are_independent(reference):
+    from services.address_mapping_service import apply_address
+    result = reference.lookup('0012345678')
+    address = VWorldAddress(
+        {'level1':'경기도', 'level2':'안양시 동안구', 'level4L':'관양동',
+         'level4LC':'0012345678', 'level5':'1590'}, '', '37', '127'
+    )
+
+    korean = apply_address({}, address, reference=result, mode='korean')
+    assert korean['관찰위치 시군구 국문'] == '안양시 동안구'
+    assert '관찰위치 시군구 영문' not in korean
+    assert all('영문' not in field for field in korean['_vworld_address']['write_fields'])
+
+    english = apply_address(korean, address, reference=result, mode='english')
+    assert english['국가영문명'] == 'Republic of Korea'
+    assert english['관찰위치 시군구 영문'] == 'Dongan-gu, Anyang-si'
+    assert all('국문' not in field for field in english['_vworld_address']['write_fields'])
+
+
+def test_exact_standard_names_handle_provider_region_changes_and_stale_code_names(reference):
+    from services.address_mapping_service import apply_address
+    address = VWorldAddress(
+        {'level1':'전남광주통합특별시', 'level2':'여수시', 'level4L':'해안동',
+         'level4LC':'0012345678', 'level5':''}, '', '34', '127'
+    )
+    record = {
+        '관찰위치 시도 국문':'전라남도',
+        '관찰위치 시군구 국문':'여수시',
+        '관찰위치 읍면동 국문':'해안동',
+    }
+    standard = {
+        ('sido', '전라남도'): 'Jeollanam-do',
+        ('sigungu', '여수시'): 'Yeosu-si',
+        ('eupmyeondong', '해안동'): 'Haean-dong',
+    }
+    with patch('services.address_mapping_service.exact_master_english', side_effect=lambda level, name: standard.get((level, name), '')):
+        updated = apply_address(record, address, reference=reference.lookup('0012345678'), mode='english')
+
+    assert updated['관찰위치 시도 영문'] == 'Jeollanam-do'
+    assert updated['관찰위치 시군구 영문'] == 'Yeosu-si'
+    assert updated['관찰위치 읍면동 영문'] == 'Haean-dong'
+
+
+def test_english_only_mode_applies_previewed_detail_to_blank_english_field(reference):
+    from services.address_mapping_service import apply_address
+    address = VWorldAddress(
+        {'level1':'경기도', 'level2':'안양시 동안구', 'level4L':'관양동',
+         'level4LC':'0012345678', 'level5':'1590'}, '', '37', '127'
+    )
+    record = {
+        '관찰위치 시도 국문':'경기도',
+        '관찰위치 시군구 국문':'안양시 동안구',
+        '관찰위치 읍면동 국문':'관양동',
+        '관찰위치 상세 국문':'사용자 현장 메모',
+    }
+
+    updated = apply_address(
+        record, address, reference=reference.lookup('0012345678'), mode='english'
+    )
+
+    assert updated['관찰위치 상세 영문'] == '1590'
+    assert '관찰위치 상세 영문' in updated['_vworld_address']['write_fields']

@@ -5,6 +5,7 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
+from copy import deepcopy
 from dataclasses import dataclass
 
 from services.coordinate_service import parse_coordinates
@@ -32,9 +33,23 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 class VWorldGeocodingService:
     ENDPOINT = "https://api.vworld.kr/req/address"
 
-    def __init__(self, transport=None, timeout=10):
+    def __init__(self, transport=None, timeout=10, cache=None):
         self.transport = transport or urllib.request.build_opener(_NoRedirect()).open
         self.timeout = timeout
+        self.cache = cache
+
+    @staticmethod
+    def cache_key(latitude, longitude):
+        return parse_coordinates(latitude, longitude)
+
+    def is_cached(self, latitude, longitude):
+        if self.cache is None:
+            return False
+        try:
+            key = self.cache_key(latitude, longitude)
+        except ValueError:
+            return False
+        return key in self.cache
 
     def lookup(self, latitude, longitude, api_key):
         try:
@@ -43,6 +58,9 @@ class VWorldGeocodingService:
             raise GeocodingError("coordinates", "유효한 위도(-90~90)와 경도(-180~180)를 입력해 주세요.") from None
         if not isinstance(api_key, str) or not api_key.strip():
             raise GeocodingError("missing_key", "VWorld API 키를 먼저 등록해 주세요.")
+        cache_key = (lat, lon)
+        if self.cache is not None and cache_key in self.cache:
+            return deepcopy(self.cache[cache_key])
         query = urllib.parse.urlencode({
             "service": "address", "request": "getAddress", "version": "2.0",
             "crs": "EPSG:4326", "point": f"{lon},{lat}", "type": "PARCEL",
@@ -68,7 +86,10 @@ class VWorldGeocodingService:
             raise GeocodingError("invalid_response", "VWorld JSON 응답을 읽을 수 없습니다.") from None
         except Exception:
             raise GeocodingError("network", "VWorld 요청 중 오류가 발생했습니다.") from None
-        return self.parse_response(payload, lat, lon)
+        result = self.parse_response(payload, lat, lon)
+        if self.cache is not None:
+            self.cache[cache_key] = deepcopy(result)
+        return result
 
     @staticmethod
     def _authentication_error():

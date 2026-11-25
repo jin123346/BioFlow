@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from config.paths import LOCAL_VERSION_FILE_PATH, MASTER_DB_PATH
 from services.data_update_service import LOCAL_VERSION_FILE
+from services.classification_service import ClassificationService, REQUIRED_COLUMNS, read_version
 from ui.widgets.recent_file_dialog import RecentFileDialog as QFileDialog
 from services.species_master_service import SpeciesMasterService
 from utils.text_utils import normalize_text
@@ -49,6 +50,8 @@ class SpeciesMasterTab(QWidget):
         self.settings = QSettings("Bioflow", "BioflowApp")
 
         self.master_service = SpeciesMasterService()
+        self.classification_service = ClassificationService()
+        self.classification_records = None
         
         self.init_ui()
         QTimer.singleShot(100, self.load_last_species_master)
@@ -70,6 +73,10 @@ class SpeciesMasterTab(QWidget):
 
         self.sub_tabs.addTab(self._build_manage_tab(), "마스터 관리")
         self.sub_tabs.addTab(self._build_search_tab(), "종 검색")
+        self.classification_tab_index = self.sub_tabs.addTab(
+            self._build_classification_tab(), "분류체계(clssfy)"
+        )
+        self.sub_tabs.currentChanged.connect(self._load_classification_tab_on_demand)
 
     def _build_manage_tab(self) -> QWidget:
         manage_widget = QWidget()
@@ -163,6 +170,74 @@ class SpeciesMasterTab(QWidget):
         self.df_search_result = None
 
         return search_widget
+
+    def _build_classification_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        controls = QHBoxLayout()
+        self.classification_search_input = QLineEdit()
+        self.classification_search_input.setPlaceholderText(
+            "clssfy ID, 국문 분류체계 또는 라틴 분류체계 검색"
+        )
+        self.classification_search_input.returnPressed.connect(self.search_classification)
+        search_button = QPushButton("검색")
+        search_button.clicked.connect(self.search_classification)
+        reset_button = QPushButton("전체 보기")
+        reset_button.clicked.connect(self.reset_classification_search)
+        reload_button = QPushButton("새로고침")
+        reload_button.clicked.connect(lambda: self.load_classification_records(force=True))
+        controls.addWidget(self.classification_search_input, 1)
+        controls.addWidget(search_button)
+        controls.addWidget(reset_button)
+        controls.addWidget(reload_button)
+        layout.addLayout(controls)
+
+        self.classification_info_label = QLabel("탭을 선택하면 분류체계 기준자료를 불러옵니다.")
+        layout.addWidget(self.classification_info_label)
+        self.classification_table = QTableWidget()
+        self.classification_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self.classification_table, 1)
+        return widget
+
+    def _load_classification_tab_on_demand(self, index):
+        if index == self.classification_tab_index:
+            self.load_classification_records()
+
+    def load_classification_records(self, force=False):
+        if self.classification_records is not None and not force:
+            return
+        try:
+            self.classification_records = self.classification_service.records()
+            self.show_classification_records(self.classification_records)
+        except ValueError as exc:
+            self.classification_records = None
+            self.classification_table.clear()
+            self.classification_table.setRowCount(0)
+            self.classification_info_label.setText(str(exc))
+
+    def show_classification_records(self, records, *, filtered=False):
+        frame = pd.DataFrame(records, columns=REQUIRED_COLUMNS)
+        populate_table_widget(self.classification_table, frame)
+        version = read_version() or "알 수 없음"
+        prefix = "검색 결과" if filtered else "전체 자료"
+        self.classification_info_label.setText(
+            f"{prefix}: {len(records):,}건 · 자료 버전: {version}"
+        )
+
+    def search_classification(self):
+        self.load_classification_records()
+        if self.classification_records is None:
+            return
+        keyword = self.classification_search_input.text().strip()
+        matches = self.classification_service.search_records(self.classification_records, keyword)
+        self.show_classification_records(matches, filtered=bool(keyword))
+
+    def reset_classification_search(self):
+        self.classification_search_input.clear()
+        self.load_classification_records()
+        if self.classification_records is not None:
+            self.show_classification_records(self.classification_records)
 
     def search_species(self):
         if self.df is None and not self.master_service.exists():

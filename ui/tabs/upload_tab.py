@@ -851,8 +851,12 @@ class UploadTab(QWidget):
         delete_row_button.clicked.connect(self.delete_selected_data_rows)
         lookup_species_button = QPushButton("국명·학명 조회")
         lookup_species_button.clicked.connect(self.fill_species_from_korean_name)
-        lookup_address_button = QPushButton("위도/경도로 주소 조회")
-        lookup_address_button.clicked.connect(self.fill_address_from_latlon)
+        lookup_all_address_button = QPushButton("국·영문 주소 조회")
+        lookup_all_address_button.clicked.connect(self.fill_address_from_latlon)
+        lookup_korean_address_button = QPushButton("국문 주소 조회")
+        lookup_korean_address_button.clicked.connect(self.fill_korean_address_from_latlon)
+        lookup_english_address_button = QPushButton("영문 주소 조회")
+        lookup_english_address_button.clicked.connect(self.fill_english_address_from_latlon)
         map_button = QPushButton("이 행 위치 확인")
         map_button.clicked.connect(self.open_location_on_map)
         self.species_status_label = QLabel("")
@@ -864,7 +868,9 @@ class UploadTab(QWidget):
         control_layout.addWidget(update_row_button)
         control_layout.addWidget(delete_row_button)
         control_layout.addWidget(lookup_species_button)
-        control_layout.addWidget(lookup_address_button)
+        control_layout.addWidget(lookup_all_address_button)
+        control_layout.addWidget(lookup_korean_address_button)
+        control_layout.addWidget(lookup_english_address_button)
         control_layout.addWidget(map_button)
         control_layout.addStretch()
         layout.addLayout(control_layout)
@@ -942,8 +948,12 @@ class UploadTab(QWidget):
         import_button.clicked.connect(self.load_rows_from_excel)
         thumbnail_button = QPushButton("동영상 미리보기 생성")
         thumbnail_button.clicked.connect(self.generate_video_thumbnails)
-        address_all_button = QPushButton("위치 주소 조회")
-        address_all_button.clicked.connect(self.fill_all_addresses_from_latlon)
+        korean_address_all_button = QPushButton("국문 위치 조회")
+        korean_address_all_button.clicked.connect(self.fill_all_korean_addresses_from_latlon)
+        english_address_all_button = QPushButton("영문 위치 조회")
+        english_address_all_button.clicked.connect(self.fill_all_english_addresses_from_latlon)
+        all_address_button = QPushButton("국·영문 위치 조회")
+        all_address_button.clicked.connect(self.fill_all_addresses_from_latlon)
         species_project_all_button = QPushButton("종ID·사업·미디어 일괄 적용")
         species_project_all_button.clicked.connect(self.fill_all_species_and_project)
         map_all_button = QPushButton("전체 위치 지도 확인")
@@ -964,7 +974,9 @@ class UploadTab(QWidget):
         save_layout.addWidget(import_button)
         save_layout.addWidget(thumbnail_button)
         save_layout.addWidget(species_project_all_button)
-        save_layout.addWidget(address_all_button)
+        save_layout.addWidget(all_address_button)
+        save_layout.addWidget(korean_address_all_button)
+        save_layout.addWidget(english_address_all_button)
         save_layout.addWidget(sort_button)
         save_layout.addWidget(coordinate_button)
         save_layout.addWidget(validate_button)
@@ -1273,8 +1285,12 @@ class UploadTab(QWidget):
         delete_row_button.clicked.connect(self.delete_selected_specimen_data_rows)
         lookup_species_button = QPushButton("국명·학명 조회")
         lookup_species_button.clicked.connect(self.fill_specimen_taxon_from_korean_name)
-        lookup_address_button = QPushButton("위도/경도로 주소 조회")
-        lookup_address_button.clicked.connect(self.fill_specimen_address_from_latlon)
+        lookup_all_address_button = QPushButton("국·영문 주소 조회")
+        lookup_all_address_button.clicked.connect(self.fill_specimen_address_from_latlon)
+        lookup_korean_address_button = QPushButton("국문 주소 조회")
+        lookup_korean_address_button.clicked.connect(self.fill_specimen_korean_address_from_latlon)
+        lookup_english_address_button = QPushButton("영문 주소 조회")
+        lookup_english_address_button.clicked.connect(self.fill_specimen_english_address_from_latlon)
         map_button = QPushButton("이 행 위치 확인")
         map_button.clicked.connect(self.open_specimen_location_on_map)
         self.specimen_species_status_label = QLabel("")
@@ -1286,7 +1302,9 @@ class UploadTab(QWidget):
         control_layout.addWidget(update_row_button)
         control_layout.addWidget(delete_row_button)
         control_layout.addWidget(lookup_species_button)
-        control_layout.addWidget(lookup_address_button)
+        control_layout.addWidget(lookup_all_address_button)
+        control_layout.addWidget(lookup_korean_address_button)
+        control_layout.addWidget(lookup_english_address_button)
         control_layout.addWidget(map_button)
         control_layout.addStretch()
         layout.addLayout(control_layout)
@@ -1355,8 +1373,12 @@ class UploadTab(QWidget):
         export_button.clicked.connect(lambda: self.export_specimen_rows_to_excel())
         import_button = QPushButton("엑셀 불러오기")
         import_button.clicked.connect(self.load_specimen_rows_from_excel)
-        address_all_button = QPushButton("위치 주소 조회")
-        address_all_button.clicked.connect(self.fill_all_specimen_addresses_from_latlon)
+        korean_address_all_button = QPushButton("국문 위치 조회")
+        korean_address_all_button.clicked.connect(self.fill_all_specimen_korean_addresses_from_latlon)
+        english_address_all_button = QPushButton("영문 위치 조회")
+        english_address_all_button.clicked.connect(self.fill_all_specimen_english_addresses_from_latlon)
+        all_address_button = QPushButton("국·영문 위치 조회")
+        all_address_button.clicked.connect(self.fill_all_specimen_addresses_from_latlon)
         species_project_all_button = QPushButton("종ID·사업 일괄 적용")
         species_project_all_button.clicked.connect(self.fill_all_specimen_species_and_project)
         map_all_button = QPushButton("전체 위치 지도 확인")
@@ -1376,7 +1398,9 @@ class UploadTab(QWidget):
         save_layout.addWidget(export_button)
         save_layout.addWidget(import_button)
         save_layout.addWidget(species_project_all_button)
-        save_layout.addWidget(address_all_button)
+        save_layout.addWidget(all_address_button)
+        save_layout.addWidget(korean_address_all_button)
+        save_layout.addWidget(english_address_all_button)
         save_layout.addWidget(sort_button)
         save_layout.addWidget(coordinate_button)
         save_layout.addWidget(validate_button)
@@ -1717,13 +1741,25 @@ html, body, #map {{ height: 100%; margin: 0; }}
             self.specimen_data_table, SPECIMEN_ROW_COLUMNS, SPECIMEN_ADDRESS_FIELDS, self.set_specimen_save_status
         )
 
-    def choose_and_fill_addresses(self, table, row_columns, address_fields, status_setter):
+    def fill_all_specimen_korean_addresses_from_latlon(self):
+        self.choose_and_fill_addresses(
+            self.specimen_data_table, SPECIMEN_ROW_COLUMNS, SPECIMEN_ADDRESS_FIELDS,
+            self.set_specimen_save_status, mode="korean"
+        )
+
+    def fill_all_specimen_english_addresses_from_latlon(self):
+        self.choose_and_fill_addresses(
+            self.specimen_data_table, SPECIMEN_ROW_COLUMNS, SPECIMEN_ADDRESS_FIELDS,
+            self.set_specimen_save_status, mode="english"
+        )
+
+    def choose_and_fill_addresses(self, table, row_columns, address_fields, status_setter, mode="all"):
         selected_rows = sorted({index.row() for index in table.selectionModel().selectedIndexes()})
-        dialog = AddressScopeDialog(len(selected_rows), self)
+        dialog = AddressScopeDialog(len(selected_rows), self, mode)
         if dialog.exec() != QDialog.Accepted:
             return
         self.batch_fill_addresses(table, row_columns, address_fields, status_setter,
-                                  scope=dialog.mode(), selected_rows=selected_rows)
+                                  scope=dialog.mode(), selected_rows=selected_rows, mode=mode)
 
     def fill_all_specimen_species_and_project(self):
         self.batch_fill_species_and_project(
@@ -1735,18 +1771,33 @@ html, body, #map {{ height: 100%; margin: 0; }}
         )
 
     def batch_fill_addresses(self, table: QTableWidget, row_columns: list[str], address_fields: dict, status_setter,
-                             scope="all", selected_rows=None):
+                             scope="all", selected_rows=None, mode="all"):
         specimen = table is self.specimen_data_table
         (self.sync_current_specimen_form_to_table if specimen else self.sync_current_form_to_table)()
         targets = []
         skipped = 0
+        skipped_without_korean = 0
         selected_rows = set(selected_rows or [])
-        output_fields = [field for korean, (english, _key) in address_fields.items() for field in (korean, english)]
+        if mode == "korean":
+            output_fields = list(address_fields)
+        elif mode == "english":
+            output_fields = [english for english, _key in address_fields.values()]
+        else:
+            output_fields = [field for korean, (english, _key) in address_fields.items()
+                             for field in (korean, english)]
+        required_korean_fields = [
+            korean for korean, (_english, level) in address_fields.items() if level == "sido"
+        ]
         for row in range(table.rowCount()):
             record = self.address_row_record(table, row_columns, row)
             if scope == "selected" and row not in selected_rows:
                 continue
             if scope == "empty" and all(str(record.get(field, "") or "").strip() for field in output_fields):
+                continue
+            if mode == "english" and any(
+                not normalize_text(record.get(field)) for field in required_korean_fields
+            ):
+                skipped_without_korean += 1
                 continue
             try:
                 parse_coordinates(record.get("위도"), record.get("경도"))
@@ -1755,17 +1806,30 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 continue
             targets.append((row, record))
         if not targets:
-            status_setter("주소 조회 대상이 없습니다. 위도·경도를 확인해 주세요.")
+            note = " 영문 조회 전 국문 주소를 먼저 조회해 주세요." if skipped_without_korean else ""
+            status_setter(f"주소 조회 대상이 없습니다. 위도·경도를 확인해 주세요.{note}")
             return
         snapshots = dict(targets)
-        updates = lookup_addresses(self, targets, specimen, differences_only=scope in {"selected", "all"})
+        if mode == "all":
+            updates = lookup_addresses(
+                self, targets, specimen, differences_only=scope in {"selected", "all"}
+            )
+        else:
+            updates = lookup_addresses(
+                self, targets, specimen, differences_only=scope in {"selected", "all"}, mode=mode
+            )
         applied = 0
         was_blocked = table.blockSignals(True)
         try:
             for row, record in updates.items():
                 if row >= table.rowCount() or self.address_row_record(table, row_columns, row) != snapshots[row]:
                     continue
-                for field in record[METADATA_KEY].get("write_fields", record[METADATA_KEY]["applied_fields"]):
+                write_fields = record[METADATA_KEY].get(
+                    "write_fields", record[METADATA_KEY]["applied_fields"]
+                )
+                if not write_fields:
+                    continue
+                for field in write_fields:
                     table.setItem(row, row_columns.index(field), QTableWidgetItem(str(record.get(field, ""))))
                 table.item(row, row_columns.index("NO.")).setData(ADDRESS_METADATA_ROLE, record[METADATA_KEY])
                 applied += 1
@@ -1781,7 +1845,12 @@ html, body, #map {{ height: 100%; margin: 0; }}
                 self._form_dirty = False
                 self.load_selected_row_to_form()
                 self.autosave_draft()
-        status_setter(f"VWorld 주소: 적용 {applied}행, 미적용 {len(targets) - applied}행, 좌표 오류 {skipped}행. 영문주소를 확인해 주세요.")
+        label = {"korean": "국문 주소", "english": "영문 주소"}.get(mode, "주소")
+        korean_note = f", 국문 주소 미입력 {skipped_without_korean}행" if skipped_without_korean else ""
+        status_setter(
+            f"VWorld {label}: 적용 {applied}행, 미적용 {len(targets) - applied}행, "
+            f"좌표 오류 {skipped}행{korean_note}."
+        )
 
     def address_row_record(self, table, columns, row):
         record = {name: table.item(row, col).text() if table.item(row, col) else ""
@@ -1792,19 +1861,30 @@ html, body, #map {{ height: 100%; margin: 0; }}
             record[METADATA_KEY] = metadata
         return record
 
-    def fill_vworld_address(self, specimen=False):
+    def fill_vworld_address(self, specimen=False, mode="all"):
         widgets = self.specimen_form_widgets if specimen else self.form_widgets
         columns = SPECIMEN_ROW_COLUMNS if specimen else ROW_COLUMNS
         current_row = self.current_specimen_data_row if specimen else self.current_data_row
         status = self.set_specimen_save_status if specimen else self.set_save_status
         snapshot = {field: self.get_form_value(field, widgets) for field in columns}
+        lookup_record = self.with_form_address_metadata(snapshot.copy(), widgets)
         row = current_row()
         try:
             parse_coordinates(snapshot.get("위도"), snapshot.get("경도"))
         except ValueError as exc:
             status(str(exc))
             return
-        updates = lookup_addresses(self, [(0, snapshot)], specimen)
+        prefix = "채집위치" if specimen else "관찰위치"
+        if mode == "english" and any(
+            not normalize_text(snapshot.get(f"{prefix} {part} 국문"))
+            for part in ("시도",)
+        ):
+            status("영문 주소 조회 전에 시도 국문을 입력하거나 국문 주소를 먼저 조회해 주세요.")
+            return
+        if mode == "all":
+            updates = lookup_addresses(self, [(0, lookup_record)], specimen)
+        else:
+            updates = lookup_addresses(self, [(0, lookup_record)], specimen, mode=mode)
         if not updates:
             status("VWorld 주소를 적용하지 않았습니다.")
             return
@@ -1812,20 +1892,27 @@ html, body, #map {{ height: 100%; margin: 0; }}
             status("조회 중 입력 내용이 변경되어 결과를 적용하지 않았습니다.")
             return
         record = updates[0]
-        for field in record[METADATA_KEY].get("write_fields", record[METADATA_KEY]["applied_fields"]):
+        write_fields = record[METADATA_KEY].get(
+            "write_fields", record[METADATA_KEY]["applied_fields"]
+        )
+        if not write_fields:
+            status("조회 결과에 적용할 주소가 없습니다. 국문 주소와 영문 기준자료를 확인해 주세요.")
+            return
+        for field in write_fields:
             self.set_form_value(field, record[field], widgets)
         widgets["위도"].setProperty(METADATA_KEY, record[METADATA_KEY])
         if row is not None:
             table = self.specimen_data_table if specimen else self.data_table
             was_blocked = table.blockSignals(True)
             try:
-                for field in (*record[METADATA_KEY].get("write_fields", record[METADATA_KEY]["applied_fields"]), "위도", "경도"):
+                for field in (*write_fields, "위도", "경도"):
                     table.setItem(row, columns.index(field), QTableWidgetItem(str(record[field])))
                 table.item(row, columns.index("NO.")).setData(ADDRESS_METADATA_ROLE, record[METADATA_KEY])
             finally:
                 table.blockSignals(was_blocked)
         (self.autosave_specimen_draft if specimen else self.autosave_draft)()
-        status("VWorld 주소를 적용했습니다. 영문주소는 법정동코드 조회 결과에 따라 적용됩니다.")
+        label = {"korean": "국문 주소", "english": "영문 주소"}.get(mode, "주소")
+        status(f"VWorld {label}를 적용했습니다.")
 
     def batch_fill_addresses_nominatim(self, table: QTableWidget, row_columns: list[str], address_fields: dict, status_setter):
         lat_col = row_columns.index("위도")
@@ -1908,6 +1995,12 @@ html, body, #map {{ height: 100%; margin: 0; }}
 
     def fill_specimen_address_from_latlon(self):
         self.fill_vworld_address(True)
+
+    def fill_specimen_korean_address_from_latlon(self):
+        self.fill_vworld_address(True, "korean")
+
+    def fill_specimen_english_address_from_latlon(self):
+        self.fill_vworld_address(True, "english")
 
     def fill_specimen_address_from_latlon_nominatim(self):
         latitude = self.to_float(self.get_form_value("위도", self.specimen_form_widgets))
@@ -3232,6 +3325,16 @@ html, body, #map {{ height: 100%; margin: 0; }}
     def fill_all_addresses_from_latlon(self):
         self.choose_and_fill_addresses(self.data_table, ROW_COLUMNS, ADDRESS_FIELDS, self.set_save_status)
 
+    def fill_all_korean_addresses_from_latlon(self):
+        self.choose_and_fill_addresses(
+            self.data_table, ROW_COLUMNS, ADDRESS_FIELDS, self.set_save_status, mode="korean"
+        )
+
+    def fill_all_english_addresses_from_latlon(self):
+        self.choose_and_fill_addresses(
+            self.data_table, ROW_COLUMNS, ADDRESS_FIELDS, self.set_save_status, mode="english"
+        )
+
     def fill_all_species_and_project(self):
         self.batch_fill_species_and_project(
             self.data_table, ROW_COLUMNS, self.form_widgets, self.set_save_status, self.schedule_autosave
@@ -3359,6 +3462,12 @@ html, body, #map {{ height: 100%; margin: 0; }}
 
     def fill_address_from_latlon(self):
         self.fill_vworld_address(False)
+
+    def fill_korean_address_from_latlon(self):
+        self.fill_vworld_address(False, "korean")
+
+    def fill_english_address_from_latlon(self):
+        self.fill_vworld_address(False, "english")
 
     def fill_address_from_latlon_nominatim(self):
         latitude = self.to_float(self.get_form_value("위도"))

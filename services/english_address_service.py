@@ -77,6 +77,7 @@ def english_fields(address, reference, specimen=False):
     elif parcel and not re.fullmatch(r"\d+(?:-\d+)?", parcel):
         parcel = ""
     return {
+        "국가영문명": "Republic of Korea",
         f"{prefix} 시도 영문": reference.sido,
         f"{prefix} 시군구 영문": district,
         f"{prefix} 읍면동 영문": reference.town,

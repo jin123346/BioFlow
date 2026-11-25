@@ -32,6 +32,29 @@ def test_request_coordinate_order_and_code_preservation():
     assert result.structure["level5"] == ""
 
 
+def test_successful_coordinates_are_reused_from_shared_session_cache():
+    transport = Mock(return_value=io.BytesIO(json.dumps(payload(level4LC="0012345678")).encode()))
+    cache = {}
+    first = VWorldGeocodingService(transport, cache=cache).lookup("37.5000", "127.0", "key")
+    second = VWorldGeocodingService(transport, cache=cache).lookup(37.5, 127, "key")
+
+    assert transport.call_count == 1
+    assert first == second
+    assert ("37.5", "127") in cache
+    second.structure["level1"] = "변경"
+    assert cache[("37.5", "127")].structure["level1"] == "서울특별시"
+
+
+def test_failed_lookup_is_not_cached():
+    transport = Mock(return_value=io.BytesIO(json.dumps({"response": {"status": "NOT_FOUND"}}).encode()))
+    cache = {}
+    service = VWorldGeocodingService(transport, cache=cache)
+
+    with pytest.raises(GeocodingError):
+        service.lookup(37.5, 127, "key")
+    assert cache == {}
+
+
 @pytest.mark.parametrize("lat,lon", [(None, 127), ("", 127), (91, 127), (37, 181), ("nan", 127), (37, "inf")])
 def test_invalid_coordinates_do_not_request(lat, lon):
     transport = Mock()

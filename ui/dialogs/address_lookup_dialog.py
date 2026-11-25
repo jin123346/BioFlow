@@ -15,12 +15,13 @@ from services.english_address_service import AddressDatabaseError, EnglishAddres
 class AddressScopeDialog(QDialog):
     """Choose which table rows should be sent to VWorld."""
 
-    def __init__(self, selected_count=0, parent=None):
+    def __init__(self, selected_count=0, parent=None, address_mode="all"):
         super().__init__(parent)
-        self.setWindowTitle("주소 조회 범위")
+        label = {"korean": "국문 주소", "english": "영문 주소"}.get(address_mode, "주소")
+        self.setWindowTitle(f"{label} 조회 범위")
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("조회할 행을 선택해 주세요. 기존 주소는 결과 확인 전까지 변경되지 않습니다."))
-        self.empty = QRadioButton("주소가 비어 있는 행만 조회")
+        self.empty = QRadioButton(f"{label}가 비어 있는 행만 조회")
         self.selected = QRadioButton(f"현재 선택한 행 조회 ({selected_count}행)")
         self.all_rows = QRadioButton("좌표가 있는 전체 행 다시 조회")
         self.empty.setChecked(True)
@@ -43,9 +44,10 @@ class AddressScopeDialog(QDialog):
 class AddressWorker(QThread):
     progress = Signal(int)
 
-    def __init__(self, service, key, targets, parent=None):
+    def __init__(self, service, key, targets, parent=None, load_english=True):
         super().__init__(parent)
         self.service, self.key, self.targets = service, key, targets
+        self.load_english = load_english
         self.results, self.errors = {}, {}
         self.references, self.reference_errors = {}, {}
 
@@ -54,15 +56,23 @@ class AddressWorker(QThread):
             for index, (identifier, record) in enumerate(self.targets):
                 if self.isInterruptionRequested():
                     break
+                cached = False
                 try:
+                    cached = bool(
+                        hasattr(self.service, "is_cached") and
+                        self.service.is_cached(record.get("위도"), record.get("경도"))
+                    )
                     address = self.service.lookup(record.get("위도"), record.get("경도"), self.key)
                     if not self.isInterruptionRequested():
                         self.results[identifier] = address
                         try:
-                            reference = EnglishAddressService().lookup(address.structure.get("level4LC", ""))
+                            if not self.load_english:
+                                reference = None
+                            else:
+                                reference = EnglishAddressService().lookup(address.structure.get("level4LC", ""))
                             if reference:
                                 self.references[identifier] = reference
-                            else:
+                            elif self.load_english:
                                 self.reference_errors[identifier] = "법정동코드가 영문 DB에 없습니다. 기존 영문주소를 유지합니다."
                         except AddressDatabaseError as exc:
                             self.reference_errors[identifier] = str(exc)
@@ -74,7 +84,7 @@ class AddressWorker(QThread):
                     self.errors[identifier] = "주소 조회 중 오류가 발생했습니다."
                 self.progress.emit(index + 1)
                 # Sequential calls; cancellation remains responsive during pacing.
-                if index + 1 < len(self.targets):
+                if not cached and index + 1 < len(self.targets):
                     for _ in range(10):
                         if self.isInterruptionRequested():
                             break
@@ -84,7 +94,7 @@ class AddressWorker(QThread):
 
 
 class AddressLookupDialog(QDialog):
-    def __init__(self, service, key, targets, parent=None):
+    def __init__(self, service, key, targets, parent=None, load_english=True):
         super().__init__(parent)
         self.setWindowTitle("VWorld 국문주소 조회")
         layout = QVBoxLayout(self)
@@ -97,7 +107,7 @@ class AddressLookupDialog(QDialog):
         layout.addWidget(self.cancel_button)
         self.cancel_button.clicked.connect(self.reject)
         self.cancelled = False
-        self.worker = AddressWorker(service, key, targets, self)
+        self.worker = AddressWorker(service, key, targets, self, load_english)
         self.worker.progress.connect(self.bar.setValue)
         self.worker.finished.connect(self.completed)
         QTimer.singleShot(0, self.start_lookup)
@@ -132,13 +142,14 @@ class AddressLookupDialog(QDialog):
 
 class AddressPreviewDialog(QDialog):
     def __init__(self, targets, results, errors, specimen=False, parent=None, references=None,
-                 reference_errors=None, differences_only=False):
+                 reference_errors=None, differences_only=False, mode="all"):
         super().__init__(parent)
         self.targets, self.results, self.errors = targets, results, errors
         self.specimen = specimen
         self.references = references or {}
         self.reference_errors = reference_errors or {}
         self.differences_only = differences_only
+        self.mode = mode
         self._editable_cells = []
         self.setWindowTitle("VWorld 주소 결과 미리보기")
         self.resize(960, 530)
@@ -172,12 +183,17 @@ class AddressPreviewDialog(QDialog):
             else:
                 fields, _ = map_address(address, self.specimen)
                 reference = self.references.get(identifier)
-                updated = apply_address(record, address, self.specimen, self.overwrite.isChecked(), reference)
-                rows = [(field, record.get(field, ""), value, updated.get(field, "")) for field, value in fields.items()]
-                if reference:
+                updated = apply_address(
+                    record, address, self.specimen, self.overwrite.isChecked(), reference, self.mode
+                )
+                rows = []
+                if self.mode in {"all", "korean"}:
+                    rows += [(field, record.get(field, ""), value, updated.get(field, ""))
+                             for field, value in fields.items()]
+                if reference and self.mode in {"all", "english"}:
                     rows += [(field, record.get(field, ""), value, updated.get(field, ""))
                              for field, value in english_fields(address, reference, self.specimen).items()]
-                elif identifier in self.reference_errors:
+                elif self.mode in {"all", "english"} and identifier in self.reference_errors:
                     rows += [("영문주소", "", self.reference_errors[identifier], "기존 값 유지")]
                 rows += [("법정동코드 (내부)", "", address.structure.get("level4LC", ""), "내부 보관"),
                          ("상세주소 보조값 (내부)", "", address.structure.get("detail", ""), "내부 보관")]
@@ -211,7 +227,7 @@ class AddressPreviewDialog(QDialog):
                 continue
             updates[identifier] = apply_address(
                 target_map[identifier], address, self.specimen, self.overwrite.isChecked(),
-                self.references.get(identifier),
+                self.references.get(identifier), self.mode,
             )
         for item in self._editable_cells:
             identifier, field = item.data(Qt.UserRole)
